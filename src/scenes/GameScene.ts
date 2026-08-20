@@ -2,13 +2,14 @@ import Phaser from 'phaser';
 import {
   CLEAR_TICKET_PRICE,
   ENEMY_ATTACK_INTERVAL,
+  ENEMY_ATTACK_INCREASE,
   ENEMY_DEFEAT_HEAL,
   ENEMY_HP_INCREASE,
   ENEMY_MAX_HP,
   ENEMY_RESPAWN_MAX,
   ENEMY_RESPAWN_MIN,
-  ENEMY_REWARD,
   ENEMY_VARIANTS,
+  EQUIPMENTS,
   AUTO_ATTACK_INTERVAL,
   AUTO_MODE_HOLD_DURATION,
   GAME_WIDTH,
@@ -27,6 +28,7 @@ type GameMode = 'title' | 'playing' | 'shop' | 'gameOver' | 'clear';
 export class GameScene extends Phaser.Scene {
   private mode: GameMode = 'title';
   private playerHp = PLAYER_MAX_HP;
+  private playerMaxHp = PLAYER_MAX_HP;
   private level = 1;
   private defeatedCount = 0;
   private enemyMaxHp = ENEMY_MAX_HP;
@@ -35,6 +37,7 @@ export class GameScene extends Phaser.Scene {
   private money = 0;
   private weaponIndex = 0;
   private purchasedWeapons = new Set<number>();
+  private purchasedEquipments = new Set<number>();
   private enemyAlive = true;
   private lastAttackAt = -PLAYER_ATTACK_INTERVAL;
   private autoMode = false;
@@ -58,9 +61,12 @@ export class GameScene extends Phaser.Scene {
   private shopButtons: Phaser.GameObjects.Rectangle[] = [];
   private shopCardObjects: Array<{ object: Phaser.GameObjects.GameObject & { x: number }; baseX: number }> = [];
   private shopScrollOffset = 0;
+  private shopItemCount = 0;
   private hudText?: Phaser.GameObjects.Text;
-  private skillText?: Phaser.GameObjects.Text;
   private autoModeText?: Phaser.GameObjects.Text;
+  private enemyAttackText?: Phaser.GameObjects.Text;
+  private skillButtons: Phaser.GameObjects.Arc[] = [];
+  private skillButtonIcons: Phaser.GameObjects.Graphics[] = [];
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
 
@@ -157,6 +163,7 @@ export class GameScene extends Phaser.Scene {
   private resetGame(): void {
     this.stopTimers();
     this.playerHp = PLAYER_MAX_HP;
+    this.playerMaxHp = PLAYER_MAX_HP;
     this.level = 1;
     this.defeatedCount = 0;
     this.enemyMaxHp = ENEMY_MAX_HP;
@@ -170,6 +177,7 @@ export class GameScene extends Phaser.Scene {
     this.money = 0;
     this.weaponIndex = 0;
     this.purchasedWeapons.clear();
+    this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
   }
@@ -177,9 +185,15 @@ export class GameScene extends Phaser.Scene {
   private showTitle(): void {
     this.mode = 'title';
     this.clearScreen();
-    this.addText(GAME_WIDTH / 2, 220, '金', 64, '#f4d35e').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 560, 'スペースキーで開始', 28, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 410, '敵を倒してお金を稼ごう', 24, '#a8dadc').setOrigin(0.5);
+    const panel = this.addScreenObject(this.add.rectangle(GAME_WIDTH / 2, 360, 760, 560, 0xf8f9fa));
+    panel.setStrokeStyle(6, 0xf4d35e, 1);
+    this.addText(GAME_WIDTH / 2, 145, '金', 76, '#f4d35e').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 235, '敵を倒して、お金を集めよう', 28, '#264653').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 300, '目標：10,000円のクリアチケットを購入する', 22, '#457b9d').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 360, 'SPACEキーを1秒長押し：自動モード', 22, '#264653').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 405, '1 / 2 / 3：スキル　　E：ショップ', 22, '#264653').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 450, '敵を倒すとお金を獲得、HPが一部回復', 20, '#457b9d').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 560, 'スペースキーで開始', 30, '#e76f51').setOrigin(0.5);
   }
 
   private showPlaying(): void {
@@ -189,8 +203,11 @@ export class GameScene extends Phaser.Scene {
     this.drawPlayfieldBackground();
     this.drawHud(true);
     this.drawCombatants();
-    this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    1/2/3: スキル    E: ショップ', 22, '#264653').setOrigin(0.5);
-    this.autoModeText = this.addText(36, 680, '', 20, '#264653');
+    this.addSkillButtons();
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    E: ショップ', 24, '#ffffff').setOrigin(0.5);
+    controlsText.setStroke('#264653', 4);
+    this.autoModeText = this.addText(GAME_WIDTH / 2, 590, '', 24, '#ffffff').setOrigin(0.5);
+    this.autoModeText.setStroke('#264653', 4);
     this.updateAutoModeText();
     this.startEnemyAttackTimer();
   }
@@ -204,38 +221,49 @@ export class GameScene extends Phaser.Scene {
     this.addText(GAME_WIDTH / 2, 80, 'ショップ', 48, '#f4d35e').setOrigin(0.5);
 
     const items = [
-      ...WEAPONS.slice(1),
-      { name: 'クリアチケット', attackPower: 0, price: CLEAR_TICKET_PRICE },
+      ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
+      ...EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 })),
+      { name: 'クリアチケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
     ];
+    this.shopItemCount = items.length;
     items.forEach((item, index) => {
       const x = 180 + index * 290;
       const card = this.addScreenObject(this.add.rectangle(x, 360, 250, 330, 0xf8f9fa));
       card.setStrokeStyle(3, 0xd9e2ec, 1);
       this.registerShopObject(card, x);
-      const icon = this.drawWeaponIcon(x, 270, index);
+      const icon = this.drawShopIcon(x, 270, index, item.kind);
       this.registerShopObject(icon, x);
       const name = this.addText(x, 390, item.name, 28, '#264653').setOrigin(0.5);
       this.registerShopObject(name, x);
-      const details = this.addText(x, 430, `攻撃力: ${item.attackPower}\n${item.price}円`, 20, '#457b9d').setOrigin(0.5);
+      const detailText = item.kind === 'equipment'
+        ? `最大HP +${item.hpBonus}\n${item.price}円`
+        : item.kind === 'ticket'
+          ? `${item.price}円でゲームクリア`
+          : `攻撃力: ${item.attackPower}\n${item.price}円`;
+      const details = this.addText(x, 430, detailText, 20, '#457b9d').setOrigin(0.5);
       this.registerShopObject(details, x);
       const button = this.addScreenObject(this.add.rectangle(x, 510, 190, 52, 0x2a9d8f));
       this.registerShopObject(button, x);
       button.setInteractive({ useHandCursor: true });
       const label = this.addText(x, 510, '', 23, '#ffffff').setOrigin(0.5);
       this.registerShopObject(label, x);
-      const purchased = index < WEAPONS.length - 1 && this.purchasedWeapons.has(index + 1);
+      const weaponIndex = item.kind === 'weapon' ? index + 1 : -1;
+      const equipmentIndex = item.kind === 'equipment' ? index - (WEAPONS.length - 1) : -1;
+      const purchased = item.kind === 'weapon'
+        ? this.purchasedWeapons.has(weaponIndex)
+        : item.kind === 'equipment' && this.purchasedEquipments.has(equipmentIndex);
       const canBuy = this.money >= item.price;
-      const isEquipped = purchased && index + 1 === this.weaponIndex;
-      label.setText(purchased ? (isEquipped ? '装備中' : '装備') : canBuy ? '購入' : '購入不可');
+      const isEquipped = item.kind === 'weapon' && purchased && weaponIndex === this.weaponIndex;
+      label.setText(purchased ? (isEquipped ? '装備中' : item.kind === 'weapon' ? '装備済み' : '購入済み') : canBuy ? '購入' : '購入不可');
       if (purchased) {
         button.setFillStyle(isEquipped ? 0x53616f : 0x457b9d);
-        if (!isEquipped) {
-          button.on('pointerdown', () => this.equipWeapon(index + 1));
+        if (item.kind === 'weapon' && !isEquipped) {
+          button.on('pointerdown', () => this.equipWeapon(weaponIndex));
         }
       } else if (!canBuy) {
         button.setFillStyle(0x53616f);
       } else {
-        button.on('pointerdown', () => this.purchase(index));
+        button.on('pointerdown', () => this.purchase(index, item.kind));
       }
       this.shopButtons.push(button);
     });
@@ -258,15 +286,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private scrollShop(direction: number): void {
-    const maxOffset = -((6 - 4) * 290);
+    const maxOffset = -Math.max(0, this.shopItemCount - 4) * 290;
     this.shopScrollOffset = Phaser.Math.Clamp(this.shopScrollOffset + direction * 290, maxOffset, 0);
     for (const cardObject of this.shopCardObjects) {
       cardObject.object.x = cardObject.baseX + this.shopScrollOffset;
     }
   }
 
-  private purchase(itemIndex: number): void {
-    if (itemIndex < WEAPONS.length - 1) {
+  private purchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'ticket'): void {
+    if (itemKind === 'weapon') {
       const weaponIndex = itemIndex + 1;
       const weapon = WEAPONS[weaponIndex];
       if (this.purchasedWeapons.has(weaponIndex) || this.money < weapon.price) {
@@ -275,6 +303,20 @@ export class GameScene extends Phaser.Scene {
       this.money -= weapon.price;
       this.weaponIndex = weaponIndex;
       this.purchasedWeapons.add(weaponIndex);
+      this.showPlaying();
+      return;
+    }
+
+    if (itemKind === 'equipment') {
+      const equipmentIndex = itemIndex - (WEAPONS.length - 1);
+      const equipment = EQUIPMENTS[equipmentIndex];
+      if (this.purchasedEquipments.has(equipmentIndex) || this.money < equipment.price) {
+        return;
+      }
+      this.money -= equipment.price;
+      this.purchasedEquipments.add(equipmentIndex);
+      this.playerMaxHp += equipment.hpBonus;
+      this.playerHp += equipment.hpBonus;
       this.showPlaying();
       return;
     }
@@ -299,11 +341,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastAttackAt = this.time.now;
     this.playAttackEffect();
-    this.enemyHp = Math.max(0, this.enemyHp - WEAPONS[this.weaponIndex].attackPower);
-    this.updateHud();
-    if (this.enemyHp === 0) {
-      this.defeatEnemy();
-    }
+    this.applyDamage(WEAPONS[this.weaponIndex].attackPower, '#f4d35e');
   }
 
   private useSkill(): void {
@@ -312,11 +350,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
-    this.enemyHp = Math.max(0, this.enemyHp - WEAPONS[this.weaponIndex].attackPower * SKILL_DAMAGE_MULTIPLIER);
-    this.updateHud();
-    if (this.enemyHp === 0) {
-      this.defeatEnemy();
-    }
+    this.applyDamage(WEAPONS[this.weaponIndex].attackPower * SKILL_DAMAGE_MULTIPLIER, '#f4d35e');
   }
 
   private useMoneyPunchSkill(): void {
@@ -325,11 +359,11 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastMoneyPunchAt = this.time.now;
     this.playMoneyPunchEffect();
-    this.enemyHp = Math.max(0, this.enemyHp - WEAPONS[this.weaponIndex].attackPower * 7);
-    this.updateHud();
-    if (this.enemyHp === 0) {
-      this.defeatEnemy();
-    }
+    this.time.delayedCall(350, () => {
+      if (this.mode === 'playing' && this.enemyAlive) {
+        this.applyDamage(WEAPONS[this.weaponIndex].attackPower * 7, '#57cc99');
+      }
+    });
   }
 
   private useRapidSkill(): void {
@@ -338,17 +372,41 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastRapidSkillAt = this.time.now;
     this.playRapidEffect();
-    this.enemyHp = Math.max(0, this.enemyHp - WEAPONS[this.weaponIndex].attackPower * 5);
+    this.applyDamage(WEAPONS[this.weaponIndex].attackPower * 5, '#ffadad');
+  }
+
+  private applyDamage(amount: number, color: string): void {
+    const damage = Math.min(this.enemyHp, amount);
+    this.enemyHp -= damage;
+    this.showDamageText(damage, color);
     this.updateHud();
     if (this.enemyHp === 0) {
       this.defeatEnemy();
     }
   }
 
+  private showDamageText(damage: number, color: string): void {
+    const damageText = this.addScreenObject(this.add.text(640, 330, `-${damage}`, {
+      fontFamily: 'sans-serif',
+      fontSize: '38px',
+      color,
+      stroke: '#264653',
+      strokeThickness: 5,
+    }).setOrigin(0.5));
+    this.tweens.add({
+      targets: damageText,
+      y: '-=55',
+      alpha: 0,
+      duration: 650,
+      ease: 'Cubic.easeOut',
+      onComplete: () => this.removeScreenObject(damageText),
+    });
+  }
+
   private defeatEnemy(): void {
     this.enemyAlive = false;
-    this.playerHp = Math.min(PLAYER_MAX_HP, this.playerHp + ENEMY_DEFEAT_HEAL);
-    this.money += ENEMY_REWARD;
+    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL);
+    this.money += this.getEnemyReward();
     this.defeatedCount += 1;
     if (this.defeatedCount % KILLS_PER_LEVEL === 0 && this.level < 3) {
       this.level += 1;
@@ -385,8 +443,7 @@ export class GameScene extends Phaser.Scene {
     if (this.mode !== 'playing' || !this.enemyAlive) {
       return;
     }
-    const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
-    this.playerHp = Math.max(0, this.playerHp - variant.attackPower);
+    this.playerHp = Math.max(0, this.playerHp - this.getEnemyAttackPower());
     this.updateHud();
     if (this.playerHp === 0) {
       this.showGameOver();
@@ -417,11 +474,9 @@ export class GameScene extends Phaser.Scene {
       this.playerHpBar = this.addHpBar(36, 58, 300, 0x2a9d8f);
       this.addText(900, 24, '敵HP', 22, '#ffffff');
       this.enemyHpBar = this.addHpBar(900, 58, 300, 0xe76f51);
+      this.enemyAttackText = this.addText(900, 105, '', 22, '#264653');
     }
     this.hudText = this.addText(36, showHpBars ? 105 : 24, '', 22, '#264653');
-    if (showHpBars) {
-      this.skillText = this.addText(36, 205, '', 20, '#264653');
-    }
     this.updateHud();
   }
 
@@ -449,28 +504,103 @@ export class GameScene extends Phaser.Scene {
       `所持金: ${this.money}円`,
       `装備中: ${WEAPONS[this.weaponIndex].name} (攻撃力 ${WEAPONS[this.weaponIndex].attackPower})`,
     ]);
-    this.playerHpBar?.setSize(300 * (this.playerHp / PLAYER_MAX_HP), 24);
+    this.playerHpBar?.setSize(300 * (this.playerHp / this.playerMaxHp), 24);
     this.enemyHpBar?.setSize(300 * (this.enemyHp / this.enemyMaxHp), 24);
+    this.enemyAttackText?.setText(`敵攻撃力: ${this.getEnemyAttackPower()}`);
     this.updateSkillHud();
   }
 
+  private getEnemyAttackPower(): number {
+    const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
+    return variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+  }
+
+  private getEnemyReward(): number {
+    const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
+    return variant.reward;
+  }
+
   private updateSkillHud(): void {
-    if (!this.skillText) {
+    this.updateSkillButtons();
+  }
+
+  private addSkillButtons(): void {
+    const skills = [
+      { x: 150, y: 270, action: () => this.useRapidSkill() },
+      { x: 150, y: 400, action: () => this.useSkill() },
+      { x: 150, y: 530, action: () => this.useMoneyPunchSkill() },
+    ];
+    for (const skill of skills) {
+      const button = this.addScreenObject(this.add.circle(skill.x, skill.y, 54, 0x457b9d));
+      button.setInteractive({ useHandCursor: true });
+      button.on('pointerdown', skill.action);
+      this.skillButtons.push(button);
+      const icon = this.drawSkillIcon(skill.x, skill.y, this.skillButtons.length - 1);
+      icon.setScale(1.2);
+      this.skillButtonIcons.push(icon);
+    }
+    this.updateSkillButtons();
+  }
+
+  private updateSkillButtons(): void {
+    if (this.skillButtons.length !== 3 || this.skillButtonIcons.length !== 3) {
       return;
     }
-    const skillLines = [this.getSkillCooldownText('1: 連撃', this.lastRapidSkillAt, RAPID_SKILL_COOLDOWN)];
-    skillLines.push(this.level >= 2 ? this.getSkillCooldownText('2: 金の一撃', this.lastSkillAt, SKILL_COOLDOWN) : '2: 金の一撃 (レベル2で解放)');
-    skillLines.push(this.level >= 3 ? this.getSkillCooldownText('3: 札束パンチ', this.lastMoneyPunchAt, MONEY_PUNCH_COOLDOWN) : '3: 札束パンチ (レベル3で解放)');
-    this.skillText.setText(skillLines);
+    const available = [
+      this.getSkillRemaining(this.lastRapidSkillAt, RAPID_SKILL_COOLDOWN) === 0,
+      this.level >= 2 && this.getSkillRemaining(this.lastSkillAt, SKILL_COOLDOWN) === 0,
+      this.level >= 3 && this.getSkillRemaining(this.lastMoneyPunchAt, MONEY_PUNCH_COOLDOWN) === 0,
+    ];
+    for (let index = 0; index < this.skillButtons.length; index += 1) {
+      this.skillButtons[index].setFillStyle(available[index] ? 0x2a9d8f : 0x53616f);
+      this.skillButtonIcons[index].setAlpha(available[index] ? 1 : 0.45);
+    }
+  }
+
+  private drawSkillIcon(x: number, y: number, skillIndex: number): Phaser.GameObjects.Graphics {
+    const icon = this.addScreenObject(this.add.graphics());
+    icon.setPosition(x, y);
+    if (skillIndex === 0) {
+      icon.lineStyle(6, 0xffffff, 1);
+      for (let index = 0; index < 3; index += 1) {
+        icon.lineBetween(-18, -28 + index * 14, 18, 8 + index * 14);
+      }
+    } else if (skillIndex === 1) {
+      this.drawAxeShape(icon);
+    } else {
+      icon.fillStyle(0x57cc99, 1);
+      icon.fillRect(-25, -16, 50, 32);
+      icon.lineStyle(3, 0xffffff, 1);
+      icon.strokeRect(-25, -16, 50, 32);
+      icon.lineBetween(-12, -10, -12, 10);
+      icon.lineBetween(8, -10, 8, 10);
+    }
+    return icon;
+  }
+
+  private drawAxeShape(graphics: Phaser.GameObjects.Graphics): void {
+    graphics.lineStyle(10, 0x8d5524, 1);
+    graphics.lineBetween(-22, 28, 8, -25);
+    graphics.fillStyle(0xf4d35e, 1);
+    graphics.fillTriangle(2, -30, 42, -22, 22, 12);
+    graphics.lineStyle(3, 0xfff3b0, 1);
+    graphics.strokeTriangle(2, -30, 42, -22, 22, 12);
+  }
+
+  private drawAxeGraphic(x: number, y: number, scale: number): Phaser.GameObjects.Graphics {
+    const axe = this.addScreenObject(this.add.graphics());
+    axe.setPosition(x, y);
+    axe.setScale(scale);
+    this.drawAxeShape(axe);
+    return axe;
+  }
+
+  private getSkillRemaining(lastUsedAt: number, cooldown: number): number {
+    return Math.max(0, cooldown - (this.time.now - lastUsedAt));
   }
 
   private updateAutoModeText(): void {
     this.autoModeText?.setText(`自動モード：${this.autoMode ? 'ON' : 'OFF'}`);
-  }
-
-  private getSkillCooldownText(name: string, lastUsedAt: number, cooldown: number): string {
-    const remaining = Math.max(0, cooldown - (this.time.now - lastUsedAt));
-    return remaining === 0 ? `${name} 使用可能` : `${name} あと ${(remaining / 1000).toFixed(1)}秒`;
   }
 
   private addHpBar(x: number, y: number, width: number, color: number): Phaser.GameObjects.Rectangle {
@@ -523,24 +653,29 @@ export class GameScene extends Phaser.Scene {
   }
 
   private playGoldStrikeEffect(): void {
-    const burst = this.addScreenObject(this.add.graphics());
-    burst.setPosition(640, 370);
-    burst.fillStyle(0xf4d35e, 0.3);
-    burst.fillCircle(0, 0, 90);
-    burst.lineStyle(10, 0xf4d35e, 1);
-    burst.strokeCircle(0, 0, 90);
-    burst.lineStyle(5, 0xfff3b0, 1);
-    burst.strokeCircle(0, 0, 125);
     this.playSkillLabel('金の一撃！', '#f4d35e');
+    const axe = this.drawAxeGraphic(280, 370, 1.25);
     this.tweens.add({
-      targets: burst,
-      scaleX: 1.5,
-      scaleY: 1.5,
-      angle: 180,
-      alpha: 0,
-      duration: 360,
-      ease: 'Cubic.easeOut',
-      onComplete: () => this.removeScreenObject(burst),
+      targets: axe,
+      x: 640,
+      angle: 720,
+      duration: 450,
+      ease: 'Cubic.easeIn',
+      onComplete: () => {
+        this.removeScreenObject(axe);
+        const impact = this.addScreenObject(this.add.graphics());
+        impact.setPosition(640, 370);
+        impact.lineStyle(8, 0xf4d35e, 1);
+        impact.strokeCircle(0, 0, 45);
+        this.tweens.add({
+          targets: impact,
+          scaleX: 1.8,
+          scaleY: 1.8,
+          alpha: 0,
+          duration: 220,
+          onComplete: () => this.removeScreenObject(impact),
+        });
+      },
     });
   }
 
@@ -631,16 +766,26 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private drawWeaponIcon(x: number, y: number, itemIndex: number): Phaser.GameObjects.Graphics {
+  private drawShopIcon(x: number, y: number, itemIndex: number, itemKind: 'weapon' | 'equipment' | 'ticket'): Phaser.GameObjects.Graphics {
     const icon = this.addScreenObject(this.add.graphics());
     icon.setPosition(x, y);
-    if (itemIndex === WEAPONS.length - 1) {
+    if (itemKind === 'ticket') {
       icon.fillStyle(0xf4d35e, 1);
       icon.fillRoundedRect(-34, -24, 68, 48, 8);
       icon.lineStyle(3, 0x9a6b00, 1);
       icon.strokeRoundedRect(-34, -24, 68, 48, 8);
       icon.fillStyle(0x9a6b00, 1);
       icon.fillCircle(0, 0, 8);
+      return icon;
+    }
+
+    if (itemKind === 'equipment') {
+      icon.fillStyle(0x457b9d, 1);
+      icon.fillRoundedRect(-32, -40, 64, 80, 12);
+      icon.lineStyle(5, 0x264653, 1);
+      icon.strokeRoundedRect(-32, -40, 64, 80, 12);
+      icon.fillStyle(0xf4d35e, 1);
+      icon.fillCircle(0, 0, 14);
       return icon;
     }
 
@@ -678,13 +823,22 @@ export class GameScene extends Phaser.Scene {
   }
 
   private chooseNextEnemyVariant(): void {
-    const offset = Phaser.Math.Between(1, ENEMY_VARIANTS.length - 1);
-    this.enemyVariantIndex = (this.enemyVariantIndex + offset) % ENEMY_VARIANTS.length;
+    const unlockedVariantCount = Math.min(
+      ENEMY_VARIANTS.length,
+      Math.floor(this.defeatedCount / KILLS_PER_LEVEL) + 1,
+    );
+    if (unlockedVariantCount === 1) {
+      this.enemyVariantIndex = 0;
+      return;
+    }
+
+    const offset = Phaser.Math.Between(1, unlockedVariantCount - 1);
+    this.enemyVariantIndex = (this.enemyVariantIndex + offset) % unlockedVariantCount;
   }
 
   private addEnemyVisual<T extends Phaser.GameObjects.Shape>(object: T): T {
     object.setInteractive({ useHandCursor: true });
-    object.on('pointerdown', () => this.attack(PLAYER_ATTACK_INTERVAL));
+    object.on('pointerdown', () => this.attack(0));
     return this.addCombatObject(object);
   }
 
@@ -742,10 +896,12 @@ export class GameScene extends Phaser.Scene {
     this.shopButtons = [];
     this.shopCardObjects = [];
     this.hudText = undefined;
-    this.skillText = undefined;
     this.autoModeText = undefined;
+    this.skillButtons = [];
+    this.skillButtonIcons = [];
     this.playerHpBar = undefined;
     this.enemyHpBar = undefined;
+    this.enemyAttackText = undefined;
   }
 
   private addText(x: number, y: number, text: string, fontSize: number, color: string): Phaser.GameObjects.Text {
