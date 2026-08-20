@@ -1,21 +1,19 @@
 export const GAME_WIDTH = 1280;
-export const GAME_HEIGHT = 720;
 
-export const PLAYER_MAX_HP = 200;
+export const PLAYER_MAX_HP = 150;
 export const ENEMY_MAX_HP = 100;
 export const ENEMY_HP_INCREASE = 50;
-export const ENEMY_ATTACK_POWER = 10;
 export const ENEMY_ATTACK_INTERVAL = 1000;
-export const ENEMY_ATTACK_INCREASE = 1;
+export const ENEMY_ATTACK_INCREASE = 3;
 export const PLAYER_ATTACK_INTERVAL = 200;
 export const AUTO_ATTACK_INTERVAL = 800;
 export const AUTO_MODE_HOLD_DURATION = 1000;
 export const SKILL_COOLDOWN = 5000;
 export const SKILL_DAMAGE_MULTIPLIER = 3;
 export const MONEY_PUNCH_COOLDOWN = 8000;
+export const HEAL_SKILL_COOLDOWN = 8000;
 export const RAPID_SKILL_COOLDOWN = 10000;
 export const KILLS_PER_LEVEL = 3;
-export const ENEMY_REWARD = 100;
 export const ENEMY_DEFEAT_HEAL = 30;
 export const ENEMY_RESPAWN_MIN = 500;
 export const ENEMY_RESPAWN_MAX = 1000;
@@ -31,6 +29,9 @@ export const EQUIPMENTS: readonly Equipment[] = [
   { name: '丈夫な鎧', hpBonus: 50, price: 250 },
   { name: '守護の盾', hpBonus: 100, price: 500 },
   { name: '生命の指輪', hpBonus: 200, price: 1000 },
+  { name: '火守りの外套', hpBonus: 300, price: 1500 },
+  { name: '不屈の鎧', hpBonus: 500, price: 2500 },
+  { name: '王の冠', hpBonus: 800, price: 4000 },
 ];
 
 export type EnemyVariant = {
