@@ -11,8 +11,6 @@ import {
   ENEMY_VARIANTS,
   EQUIPMENTS,
   HEAL_SKILL_COOLDOWN,
-  AUTO_ATTACK_INTERVAL,
-  AUTO_MODE_HOLD_DURATION,
   GAME_WIDTH,
   KILLS_PER_LEVEL,
   MONEY_PUNCH_COOLDOWN,
@@ -43,6 +41,7 @@ export class GameScene extends Phaser.Scene {
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
   private money = 0;
+  private moneyPunchTimer?: Phaser.Time.TimerEvent;
   private potionCount = 1;
   private strengthPotionCount = 1;
   private weaknessPotionCount = 1;
@@ -62,8 +61,6 @@ export class GameScene extends Phaser.Scene {
   private purchasedEquipments = new Set<number>();
   private enemyAlive = true;
   private lastAttackAt = -PLAYER_ATTACK_INTERVAL;
-  private autoMode = false;
-  private spaceHoldStartedAt?: number;
   private lastSkillAt = -SKILL_COOLDOWN;
   private lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
   private lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
@@ -89,7 +86,6 @@ export class GameScene extends Phaser.Scene {
   private shopItemCount = 0;
   private shopCategory: ShopCategory = 'weapon';
   private hudText?: Phaser.GameObjects.Text;
-  private autoModeText?: Phaser.GameObjects.Text;
   private enemyAttackText?: Phaser.GameObjects.Text;
   private enemyRewardText?: Phaser.GameObjects.Text;
   private potionCountText?: Phaser.GameObjects.Text;
@@ -155,26 +151,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.mode === 'playing') {
-      if (this.autoMode) {
-        if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-          this.autoMode = false;
-          this.updateAutoModeText();
-        }
-      } else {
-        if (this.spaceKey.isDown && this.spaceHoldStartedAt === undefined) {
-          this.spaceHoldStartedAt = this.time.now;
-        }
-        if (this.spaceKey.isDown && this.spaceHoldStartedAt !== undefined && this.time.now - this.spaceHoldStartedAt >= AUTO_MODE_HOLD_DURATION) {
-          this.autoMode = true;
-          this.spaceHoldStartedAt = undefined;
-          this.updateAutoModeText();
-        }
-        if (this.spaceKey.isUp) {
-          this.spaceHoldStartedAt = undefined;
-        }
-      }
-      if (this.autoMode) {
-        this.attack(AUTO_ATTACK_INTERVAL);
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        this.showShop();
+        return;
       }
       if (Phaser.Input.Keyboard.JustDown(this.oneKey)) {
         this.useRapidSkill();
@@ -190,9 +169,6 @@ export class GameScene extends Phaser.Scene {
       }
       if (Phaser.Input.Keyboard.JustDown(this.fiveKey)) {
         this.usePotion();
-      }
-      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        this.showShop();
       }
       this.updateSkillHud();
     } else if (this.mode === 'shop') {
@@ -219,8 +195,6 @@ export class GameScene extends Phaser.Scene {
     this.lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
     this.lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
     this.lastRapidSkillAt = -RAPID_SKILL_COOLDOWN;
-    this.autoMode = false;
-    this.spaceHoldStartedAt = undefined;
     this.money = 0;
     this.potionCount = 1;
     this.strengthPotionCount = 1;
@@ -234,10 +208,12 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionBaseMaxHp = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
-    this.weaponIndex = 0;
+    this.weaponIndex = 1;
     this.purchasedWeapons.clear();
+    this.purchasedWeapons.add(1);
     this.weaponDurability.clear();
-    this.weaponDurability.set(0, WEAPONS[0].durability);
+    this.weaponDurability.set(1, WEAPONS[1].durability);
+    this.purchasedWeapons.add(1);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -266,11 +242,8 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
     this.addPotionSlot();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
-    this.autoModeText = this.addText(GAME_WIDTH / 2, 605, '', 24, '#ffffff').setOrigin(0.5);
-    this.autoModeText.setStroke('#264653', 4);
-    this.updateAutoModeText();
     this.startEnemyAttackTimer();
   }
 
@@ -536,13 +509,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastAttackAt = this.time.now;
     this.playAttackEffect();
-    const attackMultiplier = this.getStrengthPotionMultiplier();
-    const attackDamage = this.getPlayerAttackPower() * attackMultiplier;
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower());
     this.applyDamage(attackDamage, '#f4d35e');
     this.applyWeaponEffects(true, attackDamage);
-    if (this.strengthPotionAttacksRemaining > 0) {
-      this.strengthPotionAttacksRemaining -= 1;
-    }
     this.consumeWeaponDurability();
   }
 
@@ -552,8 +521,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
-    this.applyDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER, '#f4d35e');
-    this.applyWeaponEffects(false, this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
+    this.applyDamage(attackDamage, '#f4d35e');
+    this.applyWeaponEffects(false, attackDamage);
     this.consumeWeaponDurability();
   }
 
@@ -563,10 +533,12 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastMoneyPunchAt = this.time.now;
     this.playMoneyPunchEffect();
-    this.time.delayedCall(350, () => {
+    this.moneyPunchTimer = this.time.delayedCall(350, () => {
+      this.moneyPunchTimer = undefined;
       if (this.mode === 'playing' && this.enemyAlive) {
-        this.applyDamage(this.getPlayerAttackPower() * 7, '#57cc99');
-        this.applyWeaponEffects(false, this.getPlayerAttackPower() * 7);
+        const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 7);
+        this.applyDamage(attackDamage, '#57cc99');
+        this.applyWeaponEffects(false, attackDamage);
         this.consumeWeaponDurability();
       }
     });
@@ -667,6 +639,14 @@ export class GameScene extends Phaser.Scene {
     return WEAPONS[this.weaponIndex].name === '破砕の剣' ? baseAttackPower * 1.25 : baseAttackPower;
   }
 
+  private getAttackDamage(baseDamage: number): number {
+    const damage = baseDamage * this.getStrengthPotionMultiplier();
+    if (this.strengthPotionAttacksRemaining > 0) {
+      this.strengthPotionAttacksRemaining -= 1;
+    }
+    return damage;
+  }
+
   private applyWeaponEffects(isNormalAttack: boolean, attackDamage: number): void {
     const weaponName = WEAPONS[this.weaponIndex].name;
     if (weaponName === '邪剣アビス') {
@@ -765,7 +745,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastRapidSkillAt = this.time.now;
     this.playRapidEffect();
-    const attackDamage = this.getPlayerAttackPower() * 5;
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 5);
     this.applyDamage(attackDamage, '#ffadad');
     this.applyWeaponEffects(false, attackDamage);
     this.consumeWeaponDurability();
@@ -834,7 +814,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startEnemyAttackTimer(): void {
-    this.stopEnemyAttackTimer();
+    if (this.enemyAttackTimer) {
+      return;
+    }
     this.enemyAttackTimer = this.time.addEvent({
       delay: ENEMY_ATTACK_INTERVAL,
       loop: true,
@@ -869,9 +851,60 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'gameOver';
     this.stopTimers();
     this.clearScreen();
-    this.addText(GAME_WIDTH / 2, 280, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#264653').setOrigin(0.5);
+    this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 1));
+    const topWarning = this.addScreenObject(this.add.rectangle(640, 112, 1280, 8, 0xe63946, 0));
+    const bottomWarning = this.addScreenObject(this.add.rectangle(640, 608, 1280, 8, 0xe63946, 0));
+    const panel = this.addScreenObject(this.add.rectangle(640, 300, 700, 230, 0x0b1118, 0));
+    panel.setStrokeStyle(5, 0xe63946, 0);
+    const title = this.addText(GAME_WIDTH / 2, 240, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
+    title.setAlpha(0);
+    const restartText = this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#ffffff').setOrigin(0.5);
+    restartText.setAlpha(0);
+    const exitText = this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#d9e2ec').setOrigin(0.5);
+    exitText.setAlpha(0);
+    this.cameras.main.shake(350, 0.012);
+    this.cameras.main.flash(280, 130, 20, 20);
+    this.tweens.add({ targets: [topWarning, bottomWarning], alpha: 0.9, duration: 350, delay: 120, ease: 'Cubic.easeOut' });
+    this.tweens.add({ targets: panel, alpha: 0.98, duration: 450, delay: 180, ease: 'Cubic.easeOut' });
+    this.tweens.add({
+      targets: panel,
+      scaleX: 1.04,
+      scaleY: 1.04,
+      duration: 700,
+      delay: 550,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: [topWarning, bottomWarning],
+      alpha: 0.3,
+      duration: 650,
+      delay: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: title,
+      y: 280,
+      alpha: 1,
+      duration: 650,
+      delay: 250,
+      ease: 'Back.easeOut',
+    });
+    this.tweens.add({
+      targets: title,
+      scaleX: 1.05,
+      scaleY: 1.05,
+      duration: 900,
+      delay: 900,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({ targets: restartText, alpha: 1, duration: 450, delay: 850 });
+    this.tweens.add({ targets: exitText, alpha: 1, duration: 450, delay: 1050 });
   }
 
   private showClear(): void {
@@ -1116,10 +1149,6 @@ export class GameScene extends Phaser.Scene {
     return Math.max(0, cooldown - (this.time.now - lastUsedAt));
   }
 
-  private updateAutoModeText(): void {
-    this.autoModeText?.setText(`自動モード：${this.autoMode ? 'ON' : 'OFF'}`);
-  }
-
   private addHpBar(x: number, y: number, width: number, color: number): Phaser.GameObjects.Rectangle {
     const background = this.addScreenObject(this.add.rectangle(x, y, width, 24, 0x334155));
     background.setOrigin(0, 0);
@@ -1307,21 +1336,72 @@ export class GameScene extends Phaser.Scene {
     icon.setPosition(x, y);
     if (itemKind === 'ticket') {
       icon.fillStyle(0xf4d35e, 1);
-      icon.fillRoundedRect(-34, -24, 68, 48, 8);
-      icon.lineStyle(3, 0x9a6b00, 1);
-      icon.strokeRoundedRect(-34, -24, 68, 48, 8);
+      icon.fillRoundedRect(-42, -28, 84, 56, 8);
+      icon.lineStyle(4, 0x9a6b00, 1);
+      icon.strokeRoundedRect(-42, -28, 84, 56, 8);
+      icon.lineStyle(2, 0x9a6b00, 0.9);
+      icon.lineBetween(-18, -22, -18, 22);
+      icon.lineBetween(18, -22, 18, 22);
+      icon.fillStyle(0x264653, 1);
+      icon.fillCircle(0, 0, 12);
+      icon.fillStyle(0xf4d35e, 1);
+      icon.fillTriangle(6, 0, -3, -7, -3, 7);
       icon.fillStyle(0x9a6b00, 1);
-      icon.fillCircle(0, 0, 8);
+      icon.fillRect(-12, 15, 24, 3);
+      icon.fillRect(-8, -18, 16, 3);
       return icon;
     }
 
     if (itemKind === 'equipment') {
-      icon.fillStyle(0x457b9d, 1);
-      icon.fillRoundedRect(-32, -40, 64, 80, 12);
-      icon.lineStyle(5, 0x264653, 1);
-      icon.strokeRoundedRect(-32, -40, 64, 80, 12);
-      icon.fillStyle(0xf4d35e, 1);
-      icon.fillCircle(0, 0, 14);
+      icon.lineStyle(4, 0x264653, 1);
+      if (itemIndex === 0 || itemIndex === 4) {
+        const armorColor = itemIndex === 4 ? 0x6d597a : 0x457b9d;
+        icon.fillStyle(armorColor, 1);
+        icon.fillRoundedRect(-38, -34, 76, 68, 14);
+        icon.strokeRoundedRect(-38, -34, 76, 68, 14);
+        icon.lineBetween(0, -32, 0, 32);
+        icon.lineBetween(-30, -8, 30, -8);
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 8, itemIndex === 4 ? 10 : 7);
+      } else if (itemIndex === 1) {
+        icon.fillStyle(0x8d99ae, 1);
+        icon.fillTriangle(0, -44, -38, -10, 0, 44);
+        icon.fillTriangle(0, -44, 38, -10, 0, 44);
+        icon.strokeTriangle(0, -44, -38, -10, -30, 30);
+        icon.strokeTriangle(0, -44, 38, -10, 30, 30);
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 0, 10);
+      } else if (itemIndex === 2) {
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 0, 28);
+        icon.lineStyle(4, 0x9a6b00, 1);
+        icon.strokeCircle(0, 0, 28);
+        icon.fillStyle(0x57cc99, 1);
+        icon.fillCircle(0, 0, 11);
+        icon.fillStyle(0xf8f9fa, 1);
+        icon.fillCircle(-4, -4, 4);
+      } else if (itemIndex === 3) {
+        icon.fillStyle(0xe76f51, 1);
+        icon.fillTriangle(0, -44, -42, 36, 42, 36);
+        icon.strokeTriangle(0, -44, -42, 36, 42, 36);
+        icon.lineStyle(5, 0xf4d35e, 1);
+        icon.lineBetween(-30, 18, 30, 18);
+        icon.lineStyle(4, 0x264653, 1);
+        icon.lineBetween(0, -34, 0, 30);
+      } else {
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillRect(-38, -28, 76, 14);
+        icon.fillRect(-28, -42, 14, 14);
+        icon.fillRect(-4, -42, 14, 14);
+        icon.fillRect(20, -42, 14, 14);
+        icon.lineStyle(4, 0x9a6b00, 1);
+        icon.strokeRect(-38, -28, 76, 14);
+        icon.lineBetween(-21, -42, -21, -28);
+        icon.lineBetween(3, -42, 3, -28);
+        icon.lineBetween(27, -42, 27, -28);
+        icon.fillStyle(0x57cc99, 1);
+        icon.fillCircle(0, 12, 12);
+      }
       return icon;
     }
 
@@ -1361,8 +1441,59 @@ export class GameScene extends Phaser.Scene {
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 270, 12, 0x212529)));
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 270, 12, 0x212529)));
       } else {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 400, 170, 180, variant.bodyColor)));
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.circle(640, 280, 55, variant.headColor)));
+        const goblinBody = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, variant.bodyColor));
+        const goblinHead = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, variant.headColor));
+        const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, 530, 225, 565, 255, 595, 225, variant.bodyColor));
+        const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, 685, 225, 715, 255, 750, 225, variant.bodyColor));
+        const leftEarInner = this.addEnemyVisual(this.add.triangle(565, 267, 548, 240, 565, 252, 582, 240, 0xffadad));
+        const rightEarInner = this.addEnemyVisual(this.add.triangle(715, 267, 698, 240, 715, 252, 732, 240, 0xffadad));
+        const leftEye = this.addEnemyVisual(this.add.ellipse(610, 290, 34, 26, 0xf8f9fa));
+        const rightEye = this.addEnemyVisual(this.add.ellipse(670, 290, 34, 26, 0xf8f9fa));
+        const leftPupil = this.addEnemyVisual(this.add.circle(615, 292, 8, 0x212529));
+        const rightPupil = this.addEnemyVisual(this.add.circle(665, 292, 8, 0x212529));
+        const nose = this.addEnemyVisual(this.add.triangle(640, 305, 625, 330, 655, 330, 640, 290, 0xe9c46a));
+        const mouth = this.addEnemyVisual(this.add.rectangle(640, 355, 72, 24, 0x212529));
+        const toothLeft = this.addEnemyVisual(this.add.triangle(630, 356, 620, 350, 640, 350, 630, 365, 0xf8f9fa));
+        const toothRight = this.addEnemyVisual(this.add.triangle(650, 356, 640, 350, 660, 350, 650, 365, 0xf8f9fa));
+        const shoulderArmor = this.addEnemyVisual(this.add.rectangle(640, 385, 120, 36, 0x495057));
+        const belt = this.addEnemyVisual(this.add.rectangle(640, 450, 125, 18, 0x6d597a));
+        const beltBuckle = this.addEnemyVisual(this.add.rectangle(640, 450, 18, 18, 0xf4d35e));
+        goblinBody.setDepth(2);
+        leftEar.setDepth(3);
+        rightEar.setDepth(3);
+        leftEarInner.setDepth(4);
+        rightEarInner.setDepth(4);
+        goblinHead.setDepth(5);
+        shoulderArmor.setDepth(6);
+        belt.setDepth(6);
+        beltBuckle.setDepth(7);
+        leftEye.setDepth(8);
+        rightEye.setDepth(8);
+        leftPupil.setDepth(9);
+        rightPupil.setDepth(9);
+        nose.setDepth(9);
+        mouth.setDepth(9);
+        toothLeft.setDepth(10);
+        toothRight.setDepth(10);
+        this.enemyVisuals.push(
+          goblinBody,
+          goblinHead,
+          leftEar,
+          rightEar,
+          leftEarInner,
+          rightEarInner,
+          leftEye,
+          rightEye,
+          leftPupil,
+          rightPupil,
+          nose,
+          mouth,
+          toothLeft,
+          toothRight,
+          shoulderArmor,
+          belt,
+          beltBuckle,
+        );
       }
       const enemyName = this.addText(640, 520, variant.name, 26, '#ffffff').setOrigin(0.5);
       enemyName.setStroke('#264653', 4);
@@ -1421,6 +1552,9 @@ export class GameScene extends Phaser.Scene {
     if (this.damageOverTimeTimer) {
       this.damageOverTimeTimer.paused = false;
     }
+    if (this.moneyPunchTimer) {
+      this.moneyPunchTimer.paused = false;
+    }
   }
 
   private pauseTimers(): void {
@@ -1436,6 +1570,9 @@ export class GameScene extends Phaser.Scene {
     if (this.damageOverTimeTimer) {
       this.damageOverTimeTimer.paused = true;
     }
+    if (this.moneyPunchTimer) {
+      this.moneyPunchTimer.paused = true;
+    }
   }
 
   private stopEnemyAttackTimer(): void {
@@ -1449,6 +1586,8 @@ export class GameScene extends Phaser.Scene {
     this.respawnTimer = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
+    this.moneyPunchTimer?.remove();
+    this.moneyPunchTimer = undefined;
     this.stopDamageOverTime();
   }
 
@@ -1472,7 +1611,6 @@ export class GameScene extends Phaser.Scene {
     this.shopButtons = [];
     this.shopCardObjects = [];
     this.hudText = undefined;
-    this.autoModeText = undefined;
     this.skillButtons = [];
     this.skillButtonIcons = [];
     this.skillCooldownRings = [];
