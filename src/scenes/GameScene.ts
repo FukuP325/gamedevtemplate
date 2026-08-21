@@ -264,7 +264,10 @@ export class GameScene extends Phaser.Scene {
       ]
       : category === 'equipment'
         ? EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 }))
-        : [{ name: '回復ポーション', attackPower: 0, price: POTION_PRICE, kind: 'potion' as const }];
+        : [
+          { name: '回復ポーション', effect: 'HPを全回復', attackPower: 0, price: POTION_PRICE, kind: 'potion' as const },
+          { name: '力のポーション', effect: '攻撃力をだんだん上げる', attackPower: 0, price: 250, kind: 'potion' as const },
+        ];
     this.shopItemCount = items.length;
     items.forEach((item, index) => {
       const x = 180 + index * 290;
@@ -278,11 +281,14 @@ export class GameScene extends Phaser.Scene {
       const detailText = item.kind === 'equipment'
         ? `最大HP +${item.hpBonus}\n${item.price}円`
         : item.kind === 'potion'
-          ? `HPを全回復\n${item.price}円`
+          ? `${item.effect}\n${item.price}円`
         : item.kind === 'ticket'
           ? `${item.price}円でゲームクリア`
           : `攻撃力: ${item.attackPower}\n${item.price}円`;
       const details = this.addText(x, 430, detailText, 20, '#457b9d').setOrigin(0.5);
+      if (item.kind === 'potion') {
+        details.setAlign('center');
+      }
       this.registerShopObject(details, x);
       const button = this.addScreenObject(this.add.rectangle(x, 510, 190, 52, 0x2a9d8f));
       this.registerShopObject(button, x);
