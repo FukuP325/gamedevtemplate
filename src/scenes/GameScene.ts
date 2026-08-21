@@ -11,8 +11,6 @@ import {
   ENEMY_VARIANTS,
   EQUIPMENTS,
   HEAL_SKILL_COOLDOWN,
-  AUTO_ATTACK_INTERVAL,
-  AUTO_MODE_HOLD_DURATION,
   GAME_WIDTH,
   KILLS_PER_LEVEL,
   MONEY_PUNCH_COOLDOWN,
@@ -43,6 +41,7 @@ export class GameScene extends Phaser.Scene {
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
   private money = 0;
+  private moneyPunchTimer?: Phaser.Time.TimerEvent;
   private potionCount = 1;
   private strengthPotionCount = 1;
   private weaknessPotionCount = 1;
@@ -62,8 +61,6 @@ export class GameScene extends Phaser.Scene {
   private purchasedEquipments = new Set<number>();
   private enemyAlive = true;
   private lastAttackAt = -PLAYER_ATTACK_INTERVAL;
-  private autoMode = false;
-  private spaceHoldStartedAt?: number;
   private lastSkillAt = -SKILL_COOLDOWN;
   private lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
   private lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
@@ -89,7 +86,6 @@ export class GameScene extends Phaser.Scene {
   private shopItemCount = 0;
   private shopCategory: ShopCategory = 'weapon';
   private hudText?: Phaser.GameObjects.Text;
-  private autoModeText?: Phaser.GameObjects.Text;
   private enemyAttackText?: Phaser.GameObjects.Text;
   private enemyRewardText?: Phaser.GameObjects.Text;
   private potionCountText?: Phaser.GameObjects.Text;
@@ -159,27 +155,6 @@ export class GameScene extends Phaser.Scene {
         this.showShop();
         return;
       }
-      if (this.autoMode) {
-        if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-          this.autoMode = false;
-          this.updateAutoModeText();
-        }
-      } else {
-        if (this.spaceKey.isDown && this.spaceHoldStartedAt === undefined) {
-          this.spaceHoldStartedAt = this.time.now;
-        }
-        if (this.spaceKey.isDown && this.spaceHoldStartedAt !== undefined && this.time.now - this.spaceHoldStartedAt >= AUTO_MODE_HOLD_DURATION) {
-          this.autoMode = true;
-          this.spaceHoldStartedAt = undefined;
-          this.updateAutoModeText();
-        }
-        if (this.spaceKey.isUp) {
-          this.spaceHoldStartedAt = undefined;
-        }
-      }
-      if (this.autoMode) {
-        this.attack(AUTO_ATTACK_INTERVAL);
-      }
       if (Phaser.Input.Keyboard.JustDown(this.oneKey)) {
         this.useRapidSkill();
       }
@@ -220,8 +195,6 @@ export class GameScene extends Phaser.Scene {
     this.lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
     this.lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
     this.lastRapidSkillAt = -RAPID_SKILL_COOLDOWN;
-    this.autoMode = false;
-    this.spaceHoldStartedAt = undefined;
     this.money = 0;
     this.potionCount = 1;
     this.strengthPotionCount = 1;
@@ -237,8 +210,10 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionTimer = undefined;
     this.weaponIndex = 1;
     this.purchasedWeapons.clear();
+    this.purchasedWeapons.add(1);
     this.weaponDurability.clear();
     this.weaponDurability.set(1, WEAPONS[1].durability);
+    this.purchasedWeapons.add(1);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -267,11 +242,8 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
     this.addPotionSlot();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
-    this.autoModeText = this.addText(GAME_WIDTH / 2, 605, '', 24, '#ffffff').setOrigin(0.5);
-    this.autoModeText.setStroke('#264653', 4);
-    this.updateAutoModeText();
     this.startEnemyAttackTimer();
   }
 
@@ -537,13 +509,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastAttackAt = this.time.now;
     this.playAttackEffect();
-    const attackMultiplier = this.getStrengthPotionMultiplier();
-    const attackDamage = this.getPlayerAttackPower() * attackMultiplier;
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower());
     this.applyDamage(attackDamage, '#f4d35e');
     this.applyWeaponEffects(true, attackDamage);
-    if (this.strengthPotionAttacksRemaining > 0) {
-      this.strengthPotionAttacksRemaining -= 1;
-    }
     this.consumeWeaponDurability();
   }
 
@@ -553,8 +521,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
-    this.applyDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER, '#f4d35e');
-    this.applyWeaponEffects(false, this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
+    this.applyDamage(attackDamage, '#f4d35e');
+    this.applyWeaponEffects(false, attackDamage);
     this.consumeWeaponDurability();
   }
 
@@ -564,10 +533,12 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastMoneyPunchAt = this.time.now;
     this.playMoneyPunchEffect();
-    this.time.delayedCall(350, () => {
+    this.moneyPunchTimer = this.time.delayedCall(350, () => {
+      this.moneyPunchTimer = undefined;
       if (this.mode === 'playing' && this.enemyAlive) {
-        this.applyDamage(this.getPlayerAttackPower() * 7, '#57cc99');
-        this.applyWeaponEffects(false, this.getPlayerAttackPower() * 7);
+        const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 7);
+        this.applyDamage(attackDamage, '#57cc99');
+        this.applyWeaponEffects(false, attackDamage);
         this.consumeWeaponDurability();
       }
     });
@@ -668,6 +639,14 @@ export class GameScene extends Phaser.Scene {
     return WEAPONS[this.weaponIndex].name === '破砕の剣' ? baseAttackPower * 1.25 : baseAttackPower;
   }
 
+  private getAttackDamage(baseDamage: number): number {
+    const damage = baseDamage * this.getStrengthPotionMultiplier();
+    if (this.strengthPotionAttacksRemaining > 0) {
+      this.strengthPotionAttacksRemaining -= 1;
+    }
+    return damage;
+  }
+
   private applyWeaponEffects(isNormalAttack: boolean, attackDamage: number): void {
     const weaponName = WEAPONS[this.weaponIndex].name;
     if (weaponName === '邪剣アビス') {
@@ -766,7 +745,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastRapidSkillAt = this.time.now;
     this.playRapidEffect();
-    const attackDamage = this.getPlayerAttackPower() * 5;
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 5);
     this.applyDamage(attackDamage, '#ffadad');
     this.applyWeaponEffects(false, attackDamage);
     this.consumeWeaponDurability();
@@ -835,7 +814,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startEnemyAttackTimer(): void {
-    this.stopEnemyAttackTimer();
+    if (this.enemyAttackTimer) {
+      return;
+    }
     this.enemyAttackTimer = this.time.addEvent({
       delay: ENEMY_ATTACK_INTERVAL,
       loop: true,
@@ -1168,10 +1149,6 @@ export class GameScene extends Phaser.Scene {
     return Math.max(0, cooldown - (this.time.now - lastUsedAt));
   }
 
-  private updateAutoModeText(): void {
-    this.autoModeText?.setText(`自動モード：${this.autoMode ? 'ON' : 'OFF'}`);
-  }
-
   private addHpBar(x: number, y: number, width: number, color: number): Phaser.GameObjects.Rectangle {
     const background = this.addScreenObject(this.add.rectangle(x, y, width, 24, 0x334155));
     background.setOrigin(0, 0);
@@ -1481,6 +1458,23 @@ export class GameScene extends Phaser.Scene {
         const shoulderArmor = this.addEnemyVisual(this.add.rectangle(640, 385, 120, 36, 0x495057));
         const belt = this.addEnemyVisual(this.add.rectangle(640, 450, 125, 18, 0x6d597a));
         const beltBuckle = this.addEnemyVisual(this.add.rectangle(640, 450, 18, 18, 0xf4d35e));
+        goblinBody.setDepth(2);
+        leftEar.setDepth(3);
+        rightEar.setDepth(3);
+        leftEarInner.setDepth(4);
+        rightEarInner.setDepth(4);
+        goblinHead.setDepth(5);
+        shoulderArmor.setDepth(6);
+        belt.setDepth(6);
+        beltBuckle.setDepth(7);
+        leftEye.setDepth(8);
+        rightEye.setDepth(8);
+        leftPupil.setDepth(9);
+        rightPupil.setDepth(9);
+        nose.setDepth(9);
+        mouth.setDepth(9);
+        toothLeft.setDepth(10);
+        toothRight.setDepth(10);
         this.enemyVisuals.push(
           goblinBody,
           goblinHead,
@@ -1558,6 +1552,9 @@ export class GameScene extends Phaser.Scene {
     if (this.damageOverTimeTimer) {
       this.damageOverTimeTimer.paused = false;
     }
+    if (this.moneyPunchTimer) {
+      this.moneyPunchTimer.paused = false;
+    }
   }
 
   private pauseTimers(): void {
@@ -1573,6 +1570,9 @@ export class GameScene extends Phaser.Scene {
     if (this.damageOverTimeTimer) {
       this.damageOverTimeTimer.paused = true;
     }
+    if (this.moneyPunchTimer) {
+      this.moneyPunchTimer.paused = true;
+    }
   }
 
   private stopEnemyAttackTimer(): void {
@@ -1586,6 +1586,8 @@ export class GameScene extends Phaser.Scene {
     this.respawnTimer = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
+    this.moneyPunchTimer?.remove();
+    this.moneyPunchTimer = undefined;
     this.stopDamageOverTime();
   }
 
@@ -1609,7 +1611,6 @@ export class GameScene extends Phaser.Scene {
     this.shopButtons = [];
     this.shopCardObjects = [];
     this.hudText = undefined;
-    this.autoModeText = undefined;
     this.skillButtons = [];
     this.skillButtonIcons = [];
     this.skillCooldownRings = [];
