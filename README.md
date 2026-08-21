@@ -6,7 +6,7 @@ Phaser 4 + Vite + TypeScript のゲーム開発テンプレート。
 
 ```bash
 npm install
-npm run dev
+npm run devne
 ```
 
 `npm run dev` でブラウザが自動で開き、`http://localhost:5173` でゲームが動く。
