@@ -18,12 +18,17 @@ export const ENEMY_DEFEAT_HEAL = 30;
 export const ENEMY_RESPAWN_MIN = 500;
 export const ENEMY_RESPAWN_MAX = 1000;
 export const CLEAR_TICKET_PRICE = 1000000;
+
 export const POTION_PRICE = 100;
 export const STRENGTH_POTION_PRICE = 250;
 export const WEAKNESS_POTION_PRICE = 500;
 export const HEALTH_POTION_PRICE = 600;
 export const DEFENSE_POTION_PRICE = 650;
 export const CONFUSION_POTION_PRICE = 850;
+
+// レアキャラ設定
+export const RARE_ENEMY_CHANCE = 0.2;
+export const RARE_ENEMY_REWARD_MULTIPLIER = 2;
 
 export type Equipment = {
   name: string;
