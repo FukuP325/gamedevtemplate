@@ -11,8 +11,6 @@ import {
   ENEMY_VARIANTS,
   EQUIPMENTS,
   HEAL_SKILL_COOLDOWN,
-  AUTO_ATTACK_INTERVAL,
-  AUTO_MODE_HOLD_DURATION,
   GAME_WIDTH,
   KILLS_PER_LEVEL,
   MONEY_PUNCH_COOLDOWN,
@@ -21,6 +19,9 @@ import {
   POTION_PRICE,
   STRENGTH_POTION_PRICE,
   WEAKNESS_POTION_PRICE,
+  HEALTH_POTION_PRICE,
+  DEFENSE_POTION_PRICE,
+  CONFUSION_POTION_PRICE,
   RAPID_SKILL_COOLDOWN,
   SKILL_COOLDOWN,
   SKILL_DAMAGE_MULTIPLIER,
@@ -40,17 +41,26 @@ export class GameScene extends Phaser.Scene {
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
   private money = 0;
+  private moneyPunchTimer?: Phaser.Time.TimerEvent;
   private potionCount = 1;
   private strengthPotionCount = 1;
   private weaknessPotionCount = 1;
+  private healthPotionCount = 1;
+  private defensePotionCount = 1;
+  private defensePotionActive = false;
+  private confusionPotionCount = 1;
+  private enemyConfused = false;
   private strengthPotionAttacksRemaining = 0;
+  private healthPotionBaseMaxHp?: number;
+  private healthPotionTimer?: Phaser.Time.TimerEvent;
+  private damageOverTimeTimer?: Phaser.Time.TimerEvent;
+  private damageOverTimeTicksRemaining = 0;
   private weaponIndex = 0;
+  private weaponDurability = new Map<number, number | null>();
   private purchasedWeapons = new Set<number>();
   private purchasedEquipments = new Set<number>();
   private enemyAlive = true;
   private lastAttackAt = -PLAYER_ATTACK_INTERVAL;
-  private autoMode = false;
-  private spaceHoldStartedAt?: number;
   private lastSkillAt = -SKILL_COOLDOWN;
   private lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
   private lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
@@ -76,12 +86,16 @@ export class GameScene extends Phaser.Scene {
   private shopItemCount = 0;
   private shopCategory: ShopCategory = 'weapon';
   private hudText?: Phaser.GameObjects.Text;
-  private autoModeText?: Phaser.GameObjects.Text;
   private enemyAttackText?: Phaser.GameObjects.Text;
   private enemyRewardText?: Phaser.GameObjects.Text;
   private potionCountText?: Phaser.GameObjects.Text;
   private strengthPotionCountText?: Phaser.GameObjects.Text;
   private weaknessPotionCountText?: Phaser.GameObjects.Text;
+  private healthPotionCountText?: Phaser.GameObjects.Text;
+  private defensePotionCountText?: Phaser.GameObjects.Text;
+  private confusionPotionCountText?: Phaser.GameObjects.Text;
+  private weaponBreakDialogObjects: Phaser.GameObjects.GameObject[] = [];
+  private weaponBreakDialogTimer?: Phaser.Time.TimerEvent;
   private potionSlotPanels: Phaser.GameObjects.Rectangle[] = [];
   private progressText?: Phaser.GameObjects.Text;
   private clearProgressBar?: Phaser.GameObjects.Rectangle;
@@ -145,30 +159,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.mode === 'playing') {
-      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-        this.showPause();
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        this.showShop();
         return;
-      }
-      if (this.autoMode) {
-        if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-          this.autoMode = false;
-          this.updateAutoModeText();
-        }
-      } else {
-        if (this.spaceKey.isDown && this.spaceHoldStartedAt === undefined) {
-          this.spaceHoldStartedAt = this.time.now;
-        }
-        if (this.spaceKey.isDown && this.spaceHoldStartedAt !== undefined && this.time.now - this.spaceHoldStartedAt >= AUTO_MODE_HOLD_DURATION) {
-          this.autoMode = true;
-          this.spaceHoldStartedAt = undefined;
-          this.updateAutoModeText();
-        }
-        if (this.spaceKey.isUp) {
-          this.spaceHoldStartedAt = undefined;
-        }
-      }
-      if (this.autoMode) {
-        this.attack(AUTO_ATTACK_INTERVAL);
       }
       if (Phaser.Input.Keyboard.JustDown(this.oneKey)) {
         this.useRapidSkill();
@@ -184,9 +177,6 @@ export class GameScene extends Phaser.Scene {
       }
       if (Phaser.Input.Keyboard.JustDown(this.fiveKey)) {
         this.usePotion();
-      }
-      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        this.showShop();
       }
       this.updateSkillHud();
     } else if (this.mode === 'shop') {
@@ -213,15 +203,25 @@ export class GameScene extends Phaser.Scene {
     this.lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
     this.lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
     this.lastRapidSkillAt = -RAPID_SKILL_COOLDOWN;
-    this.autoMode = false;
-    this.spaceHoldStartedAt = undefined;
     this.money = 0;
     this.potionCount = 1;
     this.strengthPotionCount = 1;
     this.weaknessPotionCount = 1;
+    this.healthPotionCount = 1;
+    this.defensePotionCount = 1;
+    this.defensePotionActive = false;
+    this.confusionPotionCount = 1;
+    this.enemyConfused = false;
     this.strengthPotionAttacksRemaining = 0;
-    this.weaponIndex = 0;
+    this.healthPotionBaseMaxHp = undefined;
+    this.healthPotionTimer?.remove();
+    this.healthPotionTimer = undefined;
+    this.weaponIndex = 1;
     this.purchasedWeapons.clear();
+    this.purchasedWeapons.add(1);
+    this.weaponDurability.clear();
+    this.weaponDurability.set(1, WEAPONS[1].durability);
+    this.purchasedWeapons.add(1);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -250,11 +250,8 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
     this.addPotionSlot();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
-    this.autoModeText = this.addText(GAME_WIDTH / 2, 605, '', 24, '#ffffff').setOrigin(0.5);
-    this.autoModeText.setStroke('#264653', 4);
-    this.updateAutoModeText();
     this.startEnemyAttackTimer();
   }
 
@@ -320,7 +317,7 @@ export class GameScene extends Phaser.Scene {
     const items = category === 'weapon'
       ? [
         ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
-        { name: 'クリアチケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
+        { name: '脱出チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
       ]
       : category === 'equipment'
         ? EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 }))
@@ -328,6 +325,9 @@ export class GameScene extends Phaser.Scene {
           { name: '回復ポーション', effect: 'HPを全回復', attackPower: 0, price: POTION_PRICE, kind: 'potion' as const },
           { name: '力のポーション', effect: '攻撃力をだんだん上げる', attackPower: 0, price: STRENGTH_POTION_PRICE, kind: 'potion' as const },
           { name: '弱体化ポーション', effect: '敵のHPを下げる', attackPower: 0, price: WEAKNESS_POTION_PRICE, kind: 'potion' as const },
+          { name: '体力のポーション', effect: 'HPを1.5倍にする（5分）', attackPower: 0, price: HEALTH_POTION_PRICE, kind: 'potion' as const },
+          { name: '守りのポーション', effect: '防御力を上げる', attackPower: 0, price: DEFENSE_POTION_PRICE, kind: 'potion' as const },
+          { name: '混乱のポーション', effect: '敵を混乱させる', attackPower: 0, price: CONFUSION_POTION_PRICE, kind: 'potion' as const },
         ];
     this.shopItemCount = items.length;
     items.forEach((item, index) => {
@@ -341,7 +341,10 @@ export class GameScene extends Phaser.Scene {
       this.registerShopObject(name, x);
       if (item.kind === 'weapon') {
         const attackDetails = this.addText(x, 427, `攻撃力: ${item.attackPower}`, 20, '#457b9d').setOrigin(0.5);
-        const durabilityDetails = this.addText(x, 448, `耐久力: ${item.durability ?? 'なし'}${item.durability === null ? '' : '回'}`, 20, '#457b9d').setOrigin(0.5);
+        const durabilityLabel = item.durability === null
+          ? item.name === '邪剣アビス' || item.name === '聖剣エターナル' ? '無限' : 'なし'
+          : `${item.durability}回`;
+        const durabilityDetails = this.addText(x, 448, `耐久力: ${durabilityLabel}`, 20, '#457b9d').setOrigin(0.5);
         const priceDetails = this.addText(x, 468, `${item.price}円`, 20, '#457b9d').setOrigin(0.5);
         this.registerShopObject(attackDetails, x);
         this.registerShopObject(durabilityDetails, x);
@@ -366,7 +369,8 @@ export class GameScene extends Phaser.Scene {
       const purchased = item.kind === 'weapon'
         ? this.purchasedWeapons.has(weaponIndex)
         : item.kind === 'equipment' && this.purchasedEquipments.has(equipmentIndex);
-      const canBuy = this.money >= item.price;
+      const requiredWeaponIndex = item.kind === 'weapon' ? this.getRequiredWeaponIndex(weaponIndex) : undefined;
+      const canBuy = this.money >= item.price && (requiredWeaponIndex === undefined || this.purchasedWeapons.has(requiredWeaponIndex));
       const isEquipped = item.kind === 'weapon' && purchased && weaponIndex === this.weaponIndex;
       label.setText(purchased ? (isEquipped ? '装備中' : item.kind === 'weapon' ? '装備済み' : '購入済み') : canBuy ? '購入' : '購入不可');
       if (purchased) {
@@ -411,12 +415,22 @@ export class GameScene extends Phaser.Scene {
     if (itemKind === 'weapon') {
       const weaponIndex = itemIndex + 1;
       const weapon = WEAPONS[weaponIndex];
-      if (this.purchasedWeapons.has(weaponIndex) || this.money < weapon.price) {
+      const requiredWeaponIndex = this.getRequiredWeaponIndex(weaponIndex);
+      if (
+        this.purchasedWeapons.has(weaponIndex)
+        || this.money < weapon.price
+        || (requiredWeaponIndex !== undefined && !this.purchasedWeapons.has(requiredWeaponIndex))
+      ) {
         return;
       }
       this.money -= weapon.price;
+      if (requiredWeaponIndex !== undefined) {
+        this.purchasedWeapons.delete(requiredWeaponIndex);
+        this.weaponDurability.delete(requiredWeaponIndex);
+      }
       this.weaponIndex = weaponIndex;
       this.purchasedWeapons.add(weaponIndex);
+      this.weaponDurability.set(weaponIndex, weapon.durability);
       this.showPlaying();
       return;
     }
@@ -437,16 +451,24 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (itemKind === 'potion') {
-      if (this.money < POTION_PRICE) {
+      const potionPrices = [POTION_PRICE, STRENGTH_POTION_PRICE, WEAKNESS_POTION_PRICE, HEALTH_POTION_PRICE, DEFENSE_POTION_PRICE, CONFUSION_POTION_PRICE];
+      const price = potionPrices[itemIndex] ?? POTION_PRICE;
+      if (this.money < price) {
         return;
       }
-      this.money -= POTION_PRICE;
+      this.money -= price;
       if (itemIndex === 0) {
         this.potionCount += 1;
       } else if (itemIndex === 1) {
         this.strengthPotionCount += 1;
-      } else {
+      } else if (itemIndex === 2) {
         this.weaknessPotionCount += 1;
+      } else if (itemIndex === 3) {
+        this.healthPotionCount += 1;
+      } else if (itemIndex === 4) {
+        this.defensePotionCount += 1;
+      } else {
+        this.confusionPotionCount += 1;
       }
       this.showShop('potion');
       return;
@@ -512,7 +534,19 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.weaponIndex = weaponIndex;
+    this.weaponDurability.set(weaponIndex, this.weaponDurability.get(weaponIndex) ?? WEAPONS[weaponIndex].durability);
     this.showPlaying();
+  }
+
+  private getRequiredWeaponIndex(weaponIndex: number): number | undefined {
+    const weaponName = WEAPONS[weaponIndex].name;
+    if (weaponName === '業火の剣') {
+      return WEAPONS.findIndex((weapon) => weapon.name === '炎の剣');
+    }
+    if (weaponName === '天雷の剣') {
+      return WEAPONS.findIndex((weapon) => weapon.name === '雷鳴の剣');
+    }
+    return undefined;
   }
 
   private attack(interval: number): void {
@@ -521,11 +555,10 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastAttackAt = this.time.now;
     this.playAttackEffect();
-    const attackMultiplier = this.getStrengthPotionMultiplier();
-    this.applyDamage(this.getPlayerAttackPower() * attackMultiplier, '#f4d35e');
-    if (this.strengthPotionAttacksRemaining > 0) {
-      this.strengthPotionAttacksRemaining -= 1;
-    }
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower());
+    this.applyDamage(attackDamage, '#f4d35e');
+    this.applyWeaponEffects(true, attackDamage);
+    this.consumeWeaponDurability();
   }
 
   private useSkill(): void {
@@ -534,7 +567,10 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
-    this.applyDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER, '#f4d35e');
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
+    this.applyDamage(attackDamage, '#f4d35e');
+    this.applyWeaponEffects(false, attackDamage);
+    this.consumeWeaponDurability();
   }
 
   private useMoneyPunchSkill(): void {
@@ -543,9 +579,13 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastMoneyPunchAt = this.time.now;
     this.playMoneyPunchEffect();
-    this.time.delayedCall(350, () => {
+    this.moneyPunchTimer = this.time.delayedCall(350, () => {
+      this.moneyPunchTimer = undefined;
       if (this.mode === 'playing' && this.enemyAlive) {
-        this.applyDamage(this.getPlayerAttackPower() * 7, '#57cc99');
+        const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 7);
+        this.applyDamage(attackDamage, '#57cc99');
+        this.applyWeaponEffects(false, attackDamage);
+        this.consumeWeaponDurability();
       }
     });
   }
@@ -596,8 +636,146 @@ export class GameScene extends Phaser.Scene {
     this.showFloatingText('敵のHP -25%', '#cdb4db', 640);
   }
 
+  private useHealthPotion(): void {
+    if (this.healthPotionCount <= 0) {
+      return;
+    }
+    this.healthPotionCount -= 1;
+    if (this.healthPotionBaseMaxHp === undefined) {
+      this.healthPotionBaseMaxHp = this.playerMaxHp;
+      this.playerMaxHp *= 1.5;
+      this.playerHp *= 1.5;
+    }
+    this.healthPotionTimer?.remove();
+    this.healthPotionTimer = this.time.delayedCall(5 * 60 * 1000, () => {
+      if (this.healthPotionBaseMaxHp !== undefined) {
+        this.playerMaxHp = this.healthPotionBaseMaxHp;
+        this.playerHp = Math.min(this.playerHp, this.playerMaxHp);
+        this.healthPotionBaseMaxHp = undefined;
+        this.updateHud();
+      }
+      this.healthPotionTimer = undefined;
+    });
+    this.showFloatingText('最大HP 1.5倍（5分）', '#57cc99', 1215);
+    this.updateHud();
+  }
+
+  private useDefensePotion(): void {
+    if (this.defensePotionCount <= 0 || this.defensePotionActive) {
+      return;
+    }
+    this.defensePotionCount -= 1;
+    this.defensePotionActive = true;
+    this.showFloatingText('敵の攻撃力 1/2', '#457b9d', 1230);
+    this.updateHud();
+  }
+
+  private useConfusionPotion(): void {
+    if (this.confusionPotionCount <= 0 || this.enemyConfused) {
+      return;
+    }
+    this.confusionPotionCount -= 1;
+    this.enemyConfused = true;
+    this.showFloatingText('敵が混乱した', '#cdb4db', 640);
+    this.updateHud();
+  }
+
   private getPlayerAttackPower(): number {
-    return WEAPONS[this.weaponIndex].attackPower;
+    const baseAttackPower = WEAPONS[this.weaponIndex].attackPower;
+    return WEAPONS[this.weaponIndex].name === '破砕の剣' ? baseAttackPower * 1.25 : baseAttackPower;
+  }
+
+  private getAttackDamage(baseDamage: number): number {
+    const damage = baseDamage * this.getStrengthPotionMultiplier();
+    if (this.strengthPotionAttacksRemaining > 0) {
+      this.strengthPotionAttacksRemaining -= 1;
+    }
+    return damage;
+  }
+
+  private applyWeaponEffects(isNormalAttack: boolean, attackDamage: number): void {
+    const weaponName = WEAPONS[this.weaponIndex].name;
+    if (weaponName === '邪剣アビス') {
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 5);
+      this.showFloatingText('HP +5', '#57cc99', 400);
+    }
+    if (!isNormalAttack || !this.enemyAlive) {
+      return;
+    }
+    if (weaponName === '神速の剣' && Math.random() < 1 / 3) {
+      this.applyDamage(attackDamage * 2, '#f4d35e');
+    } else if (weaponName === '雷鳴の剣' && Math.random() < 1 / 10) {
+      this.applyDamage(150, '#a8dadc');
+    } else if (weaponName === '天雷の剣' && Math.random() < 1 / 5) {
+      this.applyDamage(200, '#f4d35e');
+    } else if (weaponName === '聖剣エターナル' && Math.random() < 1 / 5) {
+      this.applyDamage(this.enemyHp, '#f8f9fa');
+    }
+    if (weaponName === '炎の剣') {
+      this.startDamageOverTime(10);
+    } else if (weaponName === '業火の剣') {
+      this.startDamageOverTime(30);
+    }
+  }
+
+  private startDamageOverTime(damage: number): void {
+    if (this.damageOverTimeTimer || !this.enemyAlive) {
+      return;
+    }
+    this.damageOverTimeTicksRemaining = 10;
+    this.damageOverTimeTimer = this.time.addEvent({
+      delay: 1000,
+      repeat: 9,
+      callback: () => {
+        if (this.mode === 'playing' && this.enemyAlive) {
+          this.applyDamage(damage, '#e76f51');
+        }
+        this.damageOverTimeTicksRemaining -= 1;
+        if (this.damageOverTimeTicksRemaining <= 0) {
+          this.damageOverTimeTimer = undefined;
+        }
+      },
+    });
+  }
+
+  private consumeWeaponDurability(): void {
+    const weapon = WEAPONS[this.weaponIndex];
+    if (weapon.durability === null) {
+      return;
+    }
+    const remaining = (this.weaponDurability.get(this.weaponIndex) ?? weapon.durability) - 1;
+    this.weaponDurability.set(this.weaponIndex, remaining);
+    if (remaining <= 0) {
+      this.breakWeapon();
+    }
+  }
+
+  private breakWeapon(): void {
+    const brokenWeapon = WEAPONS[this.weaponIndex];
+    this.purchasedWeapons.delete(this.weaponIndex);
+    this.weaponDurability.delete(this.weaponIndex);
+    this.weaponIndex = 0;
+    this.showWeaponBreakDialog(brokenWeapon.name);
+    this.updateHud();
+  }
+
+  private showWeaponBreakDialog(weaponName: string): void {
+    this.weaponBreakDialogTimer?.remove();
+    for (const object of this.weaponBreakDialogObjects) {
+      this.removeScreenObject(object);
+    }
+    const panel = this.addScreenObject(this.add.rectangle(640, 220, 520, 70, 0x264653));
+    panel.setDepth(1000);
+    const message = this.addText(640, 220, `${weaponName}が壊れた`, 28, '#ffffff').setOrigin(0.5);
+    message.setDepth(1001);
+    this.weaponBreakDialogObjects = [panel, message];
+    this.weaponBreakDialogTimer = this.time.delayedCall(1500, () => {
+      for (const object of this.weaponBreakDialogObjects) {
+        this.removeScreenObject(object);
+      }
+      this.weaponBreakDialogObjects = [];
+      this.weaponBreakDialogTimer = undefined;
+    });
   }
 
   private getStrengthPotionMultiplier(): number {
@@ -613,7 +791,10 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastRapidSkillAt = this.time.now;
     this.playRapidEffect();
-    this.applyDamage(this.getPlayerAttackPower() * 5, '#ffadad');
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 5);
+    this.applyDamage(attackDamage, '#ffadad');
+    this.applyWeaponEffects(false, attackDamage);
+    this.consumeWeaponDurability();
   }
 
   private applyDamage(amount: number, color: string): void {
@@ -650,6 +831,7 @@ export class GameScene extends Phaser.Scene {
 
   private defeatEnemy(): void {
     this.enemyAlive = false;
+    this.stopDamageOverTime();
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL);
     const reward = this.getEnemyReward();
     this.money += reward;
@@ -678,7 +860,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startEnemyAttackTimer(): void {
-    this.stopEnemyAttackTimer();
+    if (this.enemyAttackTimer) {
+      return;
+    }
     this.enemyAttackTimer = this.time.addEvent({
       delay: ENEMY_ATTACK_INTERVAL,
       loop: true,
@@ -688,6 +872,10 @@ export class GameScene extends Phaser.Scene {
 
   private enemyAttack(): void {
     if (this.mode !== 'playing' || !this.enemyAlive) {
+      return;
+    }
+    if (this.enemyConfused && Math.random() < 0.5) {
+      this.showFloatingText('攻撃 miss', '#cdb4db', 640);
       return;
     }
     this.playerHp = Math.max(0, this.playerHp - this.getEnemyAttackPower());
@@ -709,9 +897,60 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'gameOver';
     this.stopTimers();
     this.clearScreen();
-    this.addText(GAME_WIDTH / 2, 280, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#264653').setOrigin(0.5);
+    this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 1));
+    const topWarning = this.addScreenObject(this.add.rectangle(640, 112, 1280, 8, 0xe63946, 0));
+    const bottomWarning = this.addScreenObject(this.add.rectangle(640, 608, 1280, 8, 0xe63946, 0));
+    const panel = this.addScreenObject(this.add.rectangle(640, 300, 700, 230, 0x0b1118, 0));
+    panel.setStrokeStyle(5, 0xe63946, 0);
+    const title = this.addText(GAME_WIDTH / 2, 240, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
+    title.setAlpha(0);
+    const restartText = this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#ffffff').setOrigin(0.5);
+    restartText.setAlpha(0);
+    const exitText = this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#d9e2ec').setOrigin(0.5);
+    exitText.setAlpha(0);
+    this.cameras.main.shake(350, 0.012);
+    this.cameras.main.flash(280, 130, 20, 20);
+    this.tweens.add({ targets: [topWarning, bottomWarning], alpha: 0.9, duration: 350, delay: 120, ease: 'Cubic.easeOut' });
+    this.tweens.add({ targets: panel, alpha: 0.98, duration: 450, delay: 180, ease: 'Cubic.easeOut' });
+    this.tweens.add({
+      targets: panel,
+      scaleX: 1.04,
+      scaleY: 1.04,
+      duration: 700,
+      delay: 550,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: [topWarning, bottomWarning],
+      alpha: 0.3,
+      duration: 650,
+      delay: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: title,
+      y: 280,
+      alpha: 1,
+      duration: 650,
+      delay: 250,
+      ease: 'Back.easeOut',
+    });
+    this.tweens.add({
+      targets: title,
+      scaleX: 1.05,
+      scaleY: 1.05,
+      duration: 900,
+      delay: 900,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({ targets: restartText, alpha: 1, duration: 450, delay: 850 });
+    this.tweens.add({ targets: exitText, alpha: 1, duration: 450, delay: 1050 });
   }
 
   private showClear(): void {
@@ -781,16 +1020,23 @@ export class GameScene extends Phaser.Scene {
     this.potionCountText?.setText(`× ${this.potionCount}`);
     this.strengthPotionCountText?.setText(`× ${this.strengthPotionCount}`);
     this.weaknessPotionCountText?.setText(`× ${this.weaknessPotionCount}`);
+    this.healthPotionCountText?.setText(`× ${this.healthPotionCount}`);
+    this.defensePotionCountText?.setText(`× ${this.defensePotionCount}`);
+    this.confusionPotionCountText?.setText(`× ${this.confusionPotionCount}`);
     this.clearProgressBar?.setSize(300 * Math.min(1, this.money / CLEAR_TICKET_PRICE), 12);
     this.potionSlotPanels[0]?.setFillStyle(this.potionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[1]?.setFillStyle(this.strengthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[2]?.setFillStyle(this.weaknessPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[3]?.setFillStyle(this.healthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[4]?.setFillStyle(this.defensePotionCount > 0 && !this.defensePotionActive ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[5]?.setFillStyle(this.confusionPotionCount > 0 && !this.enemyConfused ? 0xf8f9fa : 0xadb5bd);
     this.updateSkillHud();
   }
 
   private getEnemyAttackPower(): number {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
-    return variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+    const attackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+    return this.defensePotionActive ? Math.max(1, Math.floor(attackPower / 2)) : attackPower;
   }
 
   private getEnemyReward(): number {
@@ -826,12 +1072,15 @@ export class GameScene extends Phaser.Scene {
 
   private addPotionSlot(): void {
     const slots = [
-      { x: 1045, name: '回復', count: this.potionCount, color: 0xe76f51, action: () => this.usePotion() },
-      { x: 1130, name: '力', count: this.strengthPotionCount, color: 0xf4d35e, action: () => this.useStrengthPotion() },
-      { x: 1215, name: '弱体', count: this.weaknessPotionCount, color: 0xcdb4db, action: () => this.useWeaknessPotion() },
+      { x: 930, name: '回復', count: this.potionCount, color: 0xe76f51, action: () => this.usePotion() },
+      { x: 990, name: '力', count: this.strengthPotionCount, color: 0xf4d35e, action: () => this.useStrengthPotion() },
+      { x: 1050, name: '弱体', count: this.weaknessPotionCount, color: 0xcdb4db, action: () => this.useWeaknessPotion() },
+      { x: 1110, name: '体力', count: this.healthPotionCount, color: 0x57cc99, action: () => this.useHealthPotion() },
+      { x: 1170, name: '守り', count: this.defensePotionCount, color: 0x457b9d, action: () => this.useDefensePotion() },
+      { x: 1230, name: '混乱', count: this.confusionPotionCount, color: 0x6d597a, action: () => this.useConfusionPotion() },
     ];
     for (const slot of slots) {
-      const panel = this.addScreenObject(this.add.rectangle(slot.x, 555, 75, 100, 0xf8f9fa));
+      const panel = this.addScreenObject(this.add.rectangle(slot.x, 555, 55, 100, 0xf8f9fa));
       panel.setStrokeStyle(3, 0xd9e2ec, 1);
       panel.setInteractive({ useHandCursor: true });
       panel.on('pointerdown', slot.action);
@@ -851,8 +1100,14 @@ export class GameScene extends Phaser.Scene {
         this.potionCountText = countText;
       } else if (slot.name === '力') {
         this.strengthPotionCountText = countText;
-      } else {
+      } else if (slot.name === '弱体') {
         this.weaknessPotionCountText = countText;
+      } else if (slot.name === '体力') {
+        this.healthPotionCountText = countText;
+      } else if (slot.name === '守り') {
+        this.defensePotionCountText = countText;
+      } else {
+        this.confusionPotionCountText = countText;
       }
     }
   }
@@ -938,10 +1193,6 @@ export class GameScene extends Phaser.Scene {
 
   private getSkillRemaining(lastUsedAt: number, cooldown: number): number {
     return Math.max(0, cooldown - (this.time.now - lastUsedAt));
-  }
-
-  private updateAutoModeText(): void {
-    this.autoModeText?.setText(`自動モード：${this.autoMode ? 'ON' : 'OFF'}`);
   }
 
   private addHpBar(x: number, y: number, width: number, color: number): Phaser.GameObjects.Rectangle {
@@ -1131,26 +1382,77 @@ export class GameScene extends Phaser.Scene {
     icon.setPosition(x, y);
     if (itemKind === 'ticket') {
       icon.fillStyle(0xf4d35e, 1);
-      icon.fillRoundedRect(-34, -24, 68, 48, 8);
-      icon.lineStyle(3, 0x9a6b00, 1);
-      icon.strokeRoundedRect(-34, -24, 68, 48, 8);
+      icon.fillRoundedRect(-42, -28, 84, 56, 8);
+      icon.lineStyle(4, 0x9a6b00, 1);
+      icon.strokeRoundedRect(-42, -28, 84, 56, 8);
+      icon.lineStyle(2, 0x9a6b00, 0.9);
+      icon.lineBetween(-18, -22, -18, 22);
+      icon.lineBetween(18, -22, 18, 22);
+      icon.fillStyle(0x264653, 1);
+      icon.fillCircle(0, 0, 12);
+      icon.fillStyle(0xf4d35e, 1);
+      icon.fillTriangle(6, 0, -3, -7, -3, 7);
       icon.fillStyle(0x9a6b00, 1);
-      icon.fillCircle(0, 0, 8);
+      icon.fillRect(-12, 15, 24, 3);
+      icon.fillRect(-8, -18, 16, 3);
       return icon;
     }
 
     if (itemKind === 'equipment') {
-      icon.fillStyle(0x457b9d, 1);
-      icon.fillRoundedRect(-32, -40, 64, 80, 12);
-      icon.lineStyle(5, 0x264653, 1);
-      icon.strokeRoundedRect(-32, -40, 64, 80, 12);
-      icon.fillStyle(0xf4d35e, 1);
-      icon.fillCircle(0, 0, 14);
+      icon.lineStyle(4, 0x264653, 1);
+      if (itemIndex === 0 || itemIndex === 4) {
+        const armorColor = itemIndex === 4 ? 0x6d597a : 0x457b9d;
+        icon.fillStyle(armorColor, 1);
+        icon.fillRoundedRect(-38, -34, 76, 68, 14);
+        icon.strokeRoundedRect(-38, -34, 76, 68, 14);
+        icon.lineBetween(0, -32, 0, 32);
+        icon.lineBetween(-30, -8, 30, -8);
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 8, itemIndex === 4 ? 10 : 7);
+      } else if (itemIndex === 1) {
+        icon.fillStyle(0x8d99ae, 1);
+        icon.fillTriangle(0, -44, -38, -10, 0, 44);
+        icon.fillTriangle(0, -44, 38, -10, 0, 44);
+        icon.strokeTriangle(0, -44, -38, -10, -30, 30);
+        icon.strokeTriangle(0, -44, 38, -10, 30, 30);
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 0, 10);
+      } else if (itemIndex === 2) {
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 0, 28);
+        icon.lineStyle(4, 0x9a6b00, 1);
+        icon.strokeCircle(0, 0, 28);
+        icon.fillStyle(0x57cc99, 1);
+        icon.fillCircle(0, 0, 11);
+        icon.fillStyle(0xf8f9fa, 1);
+        icon.fillCircle(-4, -4, 4);
+      } else if (itemIndex === 3) {
+        icon.fillStyle(0xe76f51, 1);
+        icon.fillTriangle(0, -44, -42, 36, 42, 36);
+        icon.strokeTriangle(0, -44, -42, 36, 42, 36);
+        icon.lineStyle(5, 0xf4d35e, 1);
+        icon.lineBetween(-30, 18, 30, 18);
+        icon.lineStyle(4, 0x264653, 1);
+        icon.lineBetween(0, -34, 0, 30);
+      } else {
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillRect(-38, -28, 76, 14);
+        icon.fillRect(-28, -42, 14, 14);
+        icon.fillRect(-4, -42, 14, 14);
+        icon.fillRect(20, -42, 14, 14);
+        icon.lineStyle(4, 0x9a6b00, 1);
+        icon.strokeRect(-38, -28, 76, 14);
+        icon.lineBetween(-21, -42, -21, -28);
+        icon.lineBetween(3, -42, 3, -28);
+        icon.lineBetween(27, -42, 27, -28);
+        icon.fillStyle(0x57cc99, 1);
+        icon.fillCircle(0, 12, 12);
+      }
       return icon;
     }
 
     if (itemKind === 'potion') {
-      const potionColors = [0xe76f51, 0xf4d35e, 0xcdb4db];
+      const potionColors = [0xe76f51, 0xf4d35e, 0xcdb4db, 0x57cc99, 0x457b9d, 0x6d597a];
       icon.fillStyle(potionColors[itemIndex] ?? 0xe76f51, 1);
       icon.fillRoundedRect(-24, -32, 48, 64, 8);
       icon.fillStyle(0x8d99ae, 1);
@@ -1185,8 +1487,59 @@ export class GameScene extends Phaser.Scene {
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 270, 12, 0x212529)));
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 270, 12, 0x212529)));
       } else {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 400, 170, 180, variant.bodyColor)));
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.circle(640, 280, 55, variant.headColor)));
+        const goblinBody = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, variant.bodyColor));
+        const goblinHead = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, variant.headColor));
+        const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, 530, 225, 565, 255, 595, 225, variant.bodyColor));
+        const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, 685, 225, 715, 255, 750, 225, variant.bodyColor));
+        const leftEarInner = this.addEnemyVisual(this.add.triangle(565, 267, 548, 240, 565, 252, 582, 240, 0xffadad));
+        const rightEarInner = this.addEnemyVisual(this.add.triangle(715, 267, 698, 240, 715, 252, 732, 240, 0xffadad));
+        const leftEye = this.addEnemyVisual(this.add.ellipse(610, 290, 34, 26, 0xf8f9fa));
+        const rightEye = this.addEnemyVisual(this.add.ellipse(670, 290, 34, 26, 0xf8f9fa));
+        const leftPupil = this.addEnemyVisual(this.add.circle(615, 292, 8, 0x212529));
+        const rightPupil = this.addEnemyVisual(this.add.circle(665, 292, 8, 0x212529));
+        const nose = this.addEnemyVisual(this.add.triangle(640, 305, 625, 330, 655, 330, 640, 290, 0xe9c46a));
+        const mouth = this.addEnemyVisual(this.add.rectangle(640, 355, 72, 24, 0x212529));
+        const toothLeft = this.addEnemyVisual(this.add.triangle(630, 356, 620, 350, 640, 350, 630, 365, 0xf8f9fa));
+        const toothRight = this.addEnemyVisual(this.add.triangle(650, 356, 640, 350, 660, 350, 650, 365, 0xf8f9fa));
+        const shoulderArmor = this.addEnemyVisual(this.add.rectangle(640, 385, 120, 36, 0x495057));
+        const belt = this.addEnemyVisual(this.add.rectangle(640, 450, 125, 18, 0x6d597a));
+        const beltBuckle = this.addEnemyVisual(this.add.rectangle(640, 450, 18, 18, 0xf4d35e));
+        goblinBody.setDepth(2);
+        leftEar.setDepth(3);
+        rightEar.setDepth(3);
+        leftEarInner.setDepth(4);
+        rightEarInner.setDepth(4);
+        goblinHead.setDepth(5);
+        shoulderArmor.setDepth(6);
+        belt.setDepth(6);
+        beltBuckle.setDepth(7);
+        leftEye.setDepth(8);
+        rightEye.setDepth(8);
+        leftPupil.setDepth(9);
+        rightPupil.setDepth(9);
+        nose.setDepth(9);
+        mouth.setDepth(9);
+        toothLeft.setDepth(10);
+        toothRight.setDepth(10);
+        this.enemyVisuals.push(
+          goblinBody,
+          goblinHead,
+          leftEar,
+          rightEar,
+          leftEarInner,
+          rightEarInner,
+          leftEye,
+          rightEye,
+          leftPupil,
+          rightPupil,
+          nose,
+          mouth,
+          toothLeft,
+          toothRight,
+          shoulderArmor,
+          belt,
+          beltBuckle,
+        );
       }
       const enemyName = this.addText(640, 520, variant.name, 26, '#ffffff').setOrigin(0.5);
       enemyName.setStroke('#264653', 4);
@@ -1242,6 +1595,15 @@ export class GameScene extends Phaser.Scene {
     if (this.respawnTimer) {
       this.respawnTimer.paused = false;
     }
+    if (this.healthPotionTimer) {
+      this.healthPotionTimer.paused = false;
+    }
+    if (this.damageOverTimeTimer) {
+      this.damageOverTimeTimer.paused = false;
+    }
+    if (this.moneyPunchTimer) {
+      this.moneyPunchTimer.paused = false;
+    }
   }
 
   private pauseTimers(): void {
@@ -1250,6 +1612,15 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.respawnTimer) {
       this.respawnTimer.paused = true;
+    }
+    if (this.healthPotionTimer) {
+      this.healthPotionTimer.paused = true;
+    }
+    if (this.damageOverTimeTimer) {
+      this.damageOverTimeTimer.paused = true;
+    }
+    if (this.moneyPunchTimer) {
+      this.moneyPunchTimer.paused = true;
     }
   }
 
@@ -1262,10 +1633,24 @@ export class GameScene extends Phaser.Scene {
     this.stopEnemyAttackTimer();
     this.respawnTimer?.remove();
     this.respawnTimer = undefined;
+    this.healthPotionTimer?.remove();
+    this.healthPotionTimer = undefined;
+    this.moneyPunchTimer?.remove();
+    this.moneyPunchTimer = undefined;
+    this.stopDamageOverTime();
+  }
+
+  private stopDamageOverTime(): void {
+    this.damageOverTimeTimer?.remove();
+    this.damageOverTimeTimer = undefined;
+    this.damageOverTimeTicksRemaining = 0;
   }
 
   private clearScreen(): void {
     this.tweens.killAll();
+    this.weaponBreakDialogTimer?.remove();
+    this.weaponBreakDialogTimer = undefined;
+    this.weaponBreakDialogObjects = [];
     for (const object of this.screenObjects) {
       object.destroy();
     }
@@ -1275,7 +1660,6 @@ export class GameScene extends Phaser.Scene {
     this.shopButtons = [];
     this.shopCardObjects = [];
     this.hudText = undefined;
-    this.autoModeText = undefined;
     this.skillButtons = [];
     this.skillButtonIcons = [];
     this.skillCooldownRings = [];
@@ -1290,6 +1674,9 @@ export class GameScene extends Phaser.Scene {
     this.potionCountText = undefined;
     this.strengthPotionCountText = undefined;
     this.weaknessPotionCountText = undefined;
+    this.healthPotionCountText = undefined;
+    this.defensePotionCountText = undefined;
+    this.confusionPotionCountText = undefined;
     this.potionSlotPanels = [];
   }
 
