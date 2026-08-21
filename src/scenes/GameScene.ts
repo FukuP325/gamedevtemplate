@@ -55,6 +55,7 @@ export class GameScene extends Phaser.Scene {
   private healthPotionBaseMaxHp?: number;
   private healthPotionTimer?: Phaser.Time.TimerEvent;
   private weaponIndex = 0;
+  private weaponDurability = new Map<number, number | null>();
   private purchasedWeapons = new Set<number>();
   private purchasedEquipments = new Set<number>();
   private enemyAlive = true;
@@ -95,6 +96,8 @@ export class GameScene extends Phaser.Scene {
   private healthPotionCountText?: Phaser.GameObjects.Text;
   private defensePotionCountText?: Phaser.GameObjects.Text;
   private confusionPotionCountText?: Phaser.GameObjects.Text;
+  private weaponBreakDialogObjects: Phaser.GameObjects.GameObject[] = [];
+  private weaponBreakDialogTimer?: Phaser.Time.TimerEvent;
   private potionSlotPanels: Phaser.GameObjects.Rectangle[] = [];
   private progressText?: Phaser.GameObjects.Text;
   private clearProgressBar?: Phaser.GameObjects.Rectangle;
@@ -231,6 +234,8 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionTimer = undefined;
     this.weaponIndex = 0;
     this.purchasedWeapons.clear();
+    this.weaponDurability.clear();
+    this.weaponDurability.set(0, WEAPONS[0].durability);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -292,7 +297,7 @@ export class GameScene extends Phaser.Scene {
     const items = category === 'weapon'
       ? [
         ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
-        { name: 'クリアチケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
+        { name: '脱出チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
       ]
       : category === 'equipment'
         ? EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 }))
@@ -392,6 +397,7 @@ export class GameScene extends Phaser.Scene {
       this.money -= weapon.price;
       this.weaponIndex = weaponIndex;
       this.purchasedWeapons.add(weaponIndex);
+      this.weaponDurability.set(weaponIndex, weapon.durability);
       this.showPlaying();
       return;
     }
@@ -494,6 +500,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     this.weaponIndex = weaponIndex;
+    this.weaponDurability.set(weaponIndex, this.weaponDurability.get(weaponIndex) ?? WEAPONS[weaponIndex].durability);
     this.showPlaying();
   }
 
@@ -508,6 +515,7 @@ export class GameScene extends Phaser.Scene {
     if (this.strengthPotionAttacksRemaining > 0) {
       this.strengthPotionAttacksRemaining -= 1;
     }
+    this.consumeWeaponDurability();
   }
 
   private useSkill(): void {
@@ -517,6 +525,7 @@ export class GameScene extends Phaser.Scene {
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
     this.applyDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER, '#f4d35e');
+    this.consumeWeaponDurability();
   }
 
   private useMoneyPunchSkill(): void {
@@ -528,6 +537,7 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(350, () => {
       if (this.mode === 'playing' && this.enemyAlive) {
         this.applyDamage(this.getPlayerAttackPower() * 7, '#57cc99');
+        this.consumeWeaponDurability();
       }
     });
   }
@@ -626,6 +636,46 @@ export class GameScene extends Phaser.Scene {
     return WEAPONS[this.weaponIndex].attackPower;
   }
 
+  private consumeWeaponDurability(): void {
+    const weapon = WEAPONS[this.weaponIndex];
+    if (weapon.durability === null) {
+      return;
+    }
+    const remaining = (this.weaponDurability.get(this.weaponIndex) ?? weapon.durability) - 1;
+    this.weaponDurability.set(this.weaponIndex, remaining);
+    if (remaining <= 0) {
+      this.breakWeapon();
+    }
+  }
+
+  private breakWeapon(): void {
+    const brokenWeapon = WEAPONS[this.weaponIndex];
+    this.purchasedWeapons.delete(this.weaponIndex);
+    this.weaponDurability.delete(this.weaponIndex);
+    this.weaponIndex = 0;
+    this.showWeaponBreakDialog(brokenWeapon.name);
+    this.updateHud();
+  }
+
+  private showWeaponBreakDialog(weaponName: string): void {
+    this.weaponBreakDialogTimer?.remove();
+    for (const object of this.weaponBreakDialogObjects) {
+      this.removeScreenObject(object);
+    }
+    const panel = this.addScreenObject(this.add.rectangle(640, 220, 520, 70, 0x264653));
+    panel.setDepth(1000);
+    const message = this.addText(640, 220, `${weaponName}が壊れた`, 28, '#ffffff').setOrigin(0.5);
+    message.setDepth(1001);
+    this.weaponBreakDialogObjects = [panel, message];
+    this.weaponBreakDialogTimer = this.time.delayedCall(1500, () => {
+      for (const object of this.weaponBreakDialogObjects) {
+        this.removeScreenObject(object);
+      }
+      this.weaponBreakDialogObjects = [];
+      this.weaponBreakDialogTimer = undefined;
+    });
+  }
+
   private getStrengthPotionMultiplier(): number {
     if (this.strengthPotionAttacksRemaining <= 0) {
       return 1;
@@ -640,6 +690,7 @@ export class GameScene extends Phaser.Scene {
     this.lastRapidSkillAt = this.time.now;
     this.playRapidEffect();
     this.applyDamage(this.getPlayerAttackPower() * 5, '#ffadad');
+    this.consumeWeaponDurability();
   }
 
   private applyDamage(amount: number, color: string): void {
@@ -1317,6 +1368,9 @@ export class GameScene extends Phaser.Scene {
 
   private clearScreen(): void {
     this.tweens.killAll();
+    this.weaponBreakDialogTimer?.remove();
+    this.weaponBreakDialogTimer = undefined;
+    this.weaponBreakDialogObjects = [];
     for (const object of this.screenObjects) {
       object.destroy();
     }
