@@ -28,7 +28,7 @@ import {
   WEAPONS,
 } from '../game/constants';
 
-type GameMode = 'title' | 'playing' | 'shop' | 'gameOver' | 'clear';
+type GameMode = 'title' | 'playing' | 'paused' | 'shop' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment' | 'potion';
 
 export class GameScene extends Phaser.Scene {
@@ -103,6 +103,7 @@ export class GameScene extends Phaser.Scene {
   private skillButtonIcons: Phaser.GameObjects.Graphics[] = [];
   private skillCooldownRings: Phaser.GameObjects.Graphics[] = [];
   private confirmationObjects: Phaser.GameObjects.GameObject[] = [];
+  private pauseOverlayObjects: Phaser.GameObjects.GameObject[] = [];
   private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
@@ -148,6 +149,13 @@ export class GameScene extends Phaser.Scene {
         this.showTitle();
         return;
       }
+    }
+
+    if (this.mode === 'paused') {
+      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.hidePause();
+      }
+      return;
     }
 
     if (this.mode === 'playing') {
@@ -245,6 +253,43 @@ export class GameScene extends Phaser.Scene {
     const controlsText = this.addText(GAME_WIDTH / 2, 650, 'E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
     this.startEnemyAttackTimer();
+  }
+
+  private showPause(): void {
+    this.mode = 'paused';
+    this.pauseTimers();
+    const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55));
+    overlay.setInteractive();
+    this.pauseOverlayObjects.push(overlay);
+    const pauseText = this.addScreenObject(this.add.text(640, 180, 'pause', {
+      fontFamily: 'sans-serif',
+      fontSize: '64px',
+      color: '#ffffff',
+    }).setOrigin(0.5));
+    this.pauseOverlayObjects.push(pauseText);
+    const shopButton = this.addScreenObject(this.add.rectangle(640, 360, 320, 72, 0x2a9d8f));
+    shopButton.setInteractive({ useHandCursor: true });
+    shopButton.on('pointerdown', () => this.showShop());
+    this.pauseOverlayObjects.push(shopButton);
+    const shopButtonText = this.addScreenObject(this.add.text(640, 360, 'ショップへ', {
+      fontFamily: 'sans-serif',
+      fontSize: '28px',
+      color: '#ffffff',
+    }).setOrigin(0.5));
+    this.pauseOverlayObjects.push(shopButtonText);
+  }
+
+  private hidePause(): void {
+    for (const object of this.pauseOverlayObjects) {
+      const index = this.screenObjects.indexOf(object);
+      if (index >= 0) {
+        this.screenObjects.splice(index, 1);
+      }
+      object.destroy();
+    }
+    this.pauseOverlayObjects = [];
+    this.mode = 'playing';
+    this.resumeTimers();
   }
 
   private showShop(category: ShopCategory = this.shopCategory): void {
@@ -475,6 +520,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.confirmationObjects = [];
+    this.pauseOverlayObjects = [];
     this.pendingPurchase = undefined;
     for (const button of this.shopButtons) {
       if (button.input) {
@@ -1543,6 +1589,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private resumeTimers(): void {
+    if (this.enemyAttackTimer) {
+      this.enemyAttackTimer.paused = false;
+    }
     if (this.respawnTimer) {
       this.respawnTimer.paused = false;
     }
