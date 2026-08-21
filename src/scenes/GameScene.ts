@@ -264,12 +264,22 @@ export class GameScene extends Phaser.Scene {
     const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55));
     overlay.setInteractive();
     this.pauseOverlayObjects.push(overlay);
-    const pauseText = this.addScreenObject(this.add.text(640, 360, 'pause', {
+    const pauseText = this.addScreenObject(this.add.text(640, 180, 'pause', {
       fontFamily: 'sans-serif',
       fontSize: '64px',
       color: '#ffffff',
     }).setOrigin(0.5));
     this.pauseOverlayObjects.push(pauseText);
+    const shopButton = this.addScreenObject(this.add.rectangle(640, 360, 320, 72, 0x2a9d8f));
+    shopButton.setInteractive({ useHandCursor: true });
+    shopButton.on('pointerdown', () => this.showShop());
+    this.pauseOverlayObjects.push(shopButton);
+    const shopButtonText = this.addScreenObject(this.add.text(640, 360, 'ショップへ', {
+      fontFamily: 'sans-serif',
+      fontSize: '28px',
+      color: '#ffffff',
+    }).setOrigin(0.5));
+    this.pauseOverlayObjects.push(shopButtonText);
   }
 
   private hidePause(): void {
@@ -1226,6 +1236,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private resumeTimers(): void {
+    if (this.enemyAttackTimer) {
+      this.enemyAttackTimer.paused = false;
+    }
     if (this.respawnTimer) {
       this.respawnTimer.paused = false;
     }
