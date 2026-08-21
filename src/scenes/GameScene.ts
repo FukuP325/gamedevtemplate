@@ -49,7 +49,7 @@ export class GameScene extends Phaser.Scene {
   private healthPotionCount = 1;
   private defensePotionCount = 1;
   private defensePotionActive = false;
-  private confusionPotionCount = 0;
+  private confusionPotionCount = 1;
   private enemyConfused = false;
   private strengthPotionAttacksRemaining = 0;
   private healthPotionBaseMaxHp?: number;
@@ -228,16 +228,16 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionCount = 1;
     this.defensePotionCount = 1;
     this.defensePotionActive = false;
-    this.confusionPotionCount = 0;
+    this.confusionPotionCount = 1;
     this.enemyConfused = false;
     this.strengthPotionAttacksRemaining = 0;
     this.healthPotionBaseMaxHp = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
-    this.weaponIndex = 0;
+    this.weaponIndex = 1;
     this.purchasedWeapons.clear();
     this.weaponDurability.clear();
-    this.weaponDurability.set(0, WEAPONS[0].durability);
+    this.weaponDurability.set(1, WEAPONS[1].durability);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -298,7 +298,7 @@ export class GameScene extends Phaser.Scene {
 
     const items = category === 'weapon'
       ? [
-        ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
+        ...WEAPONS.slice(2).map((item) => ({ ...item, kind: 'weapon' as const })),
         { name: '脱出チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
       ]
       : category === 'equipment'
@@ -346,12 +346,13 @@ export class GameScene extends Phaser.Scene {
       button.setInteractive({ useHandCursor: true });
       const label = this.addText(x, 510, '', 23, '#ffffff').setOrigin(0.5);
       this.registerShopObject(label, x);
-      const weaponIndex = item.kind === 'weapon' ? index + 1 : -1;
+      const weaponIndex = item.kind === 'weapon' ? index + 2 : -1;
       const equipmentIndex = item.kind === 'equipment' ? index : -1;
       const purchased = item.kind === 'weapon'
         ? this.purchasedWeapons.has(weaponIndex)
         : item.kind === 'equipment' && this.purchasedEquipments.has(equipmentIndex);
-      const canBuy = this.money >= item.price;
+      const requiredWeaponIndex = item.kind === 'weapon' ? this.getRequiredWeaponIndex(weaponIndex) : undefined;
+      const canBuy = this.money >= item.price && (requiredWeaponIndex === undefined || this.purchasedWeapons.has(requiredWeaponIndex));
       const isEquipped = item.kind === 'weapon' && purchased && weaponIndex === this.weaponIndex;
       label.setText(purchased ? (isEquipped ? '装備中' : item.kind === 'weapon' ? '装備済み' : '購入済み') : canBuy ? '購入' : '購入不可');
       if (purchased) {
@@ -394,12 +395,21 @@ export class GameScene extends Phaser.Scene {
 
   private purchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket'): void {
     if (itemKind === 'weapon') {
-      const weaponIndex = itemIndex + 1;
+      const weaponIndex = itemIndex + 2;
       const weapon = WEAPONS[weaponIndex];
-      if (this.purchasedWeapons.has(weaponIndex) || this.money < weapon.price) {
+      const requiredWeaponIndex = this.getRequiredWeaponIndex(weaponIndex);
+      if (
+        this.purchasedWeapons.has(weaponIndex)
+        || this.money < weapon.price
+        || (requiredWeaponIndex !== undefined && !this.purchasedWeapons.has(requiredWeaponIndex))
+      ) {
         return;
       }
       this.money -= weapon.price;
+      if (requiredWeaponIndex !== undefined) {
+        this.purchasedWeapons.delete(requiredWeaponIndex);
+        this.weaponDurability.delete(requiredWeaponIndex);
+      }
       this.weaponIndex = weaponIndex;
       this.purchasedWeapons.add(weaponIndex);
       this.weaponDurability.set(weaponIndex, weapon.durability);
@@ -507,6 +517,17 @@ export class GameScene extends Phaser.Scene {
     this.weaponIndex = weaponIndex;
     this.weaponDurability.set(weaponIndex, this.weaponDurability.get(weaponIndex) ?? WEAPONS[weaponIndex].durability);
     this.showPlaying();
+  }
+
+  private getRequiredWeaponIndex(weaponIndex: number): number | undefined {
+    const weaponName = WEAPONS[weaponIndex].name;
+    if (weaponName === '業火の剣') {
+      return WEAPONS.findIndex((weapon) => weapon.name === '炎の剣');
+    }
+    if (weaponName === '天雷の剣') {
+      return WEAPONS.findIndex((weapon) => weapon.name === '雷鳴の剣');
+    }
+    return undefined;
   }
 
   private attack(interval: number): void {

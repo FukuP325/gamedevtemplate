@@ -63,7 +63,8 @@ export type Weapon = {
 };
 
 export const WEAPONS: readonly Weapon[] = [
-  { name: '駆け出しの剣', attackPower: 10, durability: null, price: 0 },
+  { name: '拳', attackPower: 5, durability: null, price: 0 },
+  { name: '駆け出しの剣', attackPower: 10, durability: 15, price: 0 },
   { name: '鉄の剣', attackPower: 20, durability: 30, price: 150 },
   { name: '鋼の剣', attackPower: 40, durability: 100, price: 250 },
   { name: '破砕の剣', attackPower: 60, durability: 200, price: 500 },
