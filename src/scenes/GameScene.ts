@@ -8,6 +8,8 @@ import {
   ENEMY_MAX_HP,
   ENEMY_RESPAWN_MAX,
   ENEMY_RESPAWN_MIN,
+  RARE_ENEMY_CHANCE,
+  RARE_ENEMY_REWARD_MULTIPLIER,
   ENEMY_VARIANTS,
   EQUIPMENTS,
   HEAL_SKILL_COOLDOWN,
@@ -40,6 +42,7 @@ export class GameScene extends Phaser.Scene {
   private enemyMaxHp = ENEMY_MAX_HP;
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
+  private isRareEnemy = false;
   private money = 0;
   private moneyPunchTimer?: Phaser.Time.TimerEvent;
   private potionCount = 1;
@@ -56,6 +59,8 @@ export class GameScene extends Phaser.Scene {
   private damageOverTimeTimer?: Phaser.Time.TimerEvent;
   private damageOverTimeTicksRemaining = 0;
   private weaponIndex = 0;
+  private selectedSkillByBranch: Array<number | undefined> = [undefined, undefined, undefined];
+  private skillTreeObjects: Phaser.GameObjects.GameObject[] = [];
   private weaponDurability = new Map<number, number | null>();
   private purchasedWeapons = new Set<number>();
   private purchasedEquipments = new Set<number>();
@@ -71,6 +76,7 @@ export class GameScene extends Phaser.Scene {
   private threeKey!: Phaser.Input.Keyboard.Key;
   private fourKey!: Phaser.Input.Keyboard.Key;
   private fiveKey!: Phaser.Input.Keyboard.Key;
+  private tKey!: Phaser.Input.Keyboard.Key;
   private leftKey!: Phaser.Input.Keyboard.Key;
   private rightKey!: Phaser.Input.Keyboard.Key;
   private eKey!: Phaser.Input.Keyboard.Key;
@@ -140,6 +146,7 @@ export class GameScene extends Phaser.Scene {
     this.threeKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.THREE);
     this.fourKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR);
     this.fiveKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FIVE);
+    this.tKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T);
     this.leftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
     this.rightKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
     this.eKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
@@ -169,8 +176,16 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.mode === 'playing') {
+      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.showPause();
+        return;
+      }
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         this.showShop();
+        return;
+      }
+      if (Phaser.Input.Keyboard.JustDown(this.tKey)) {
+        this.showSkillTree();
         return;
       }
       if (Phaser.Input.Keyboard.JustDown(this.oneKey)) {
@@ -190,7 +205,11 @@ export class GameScene extends Phaser.Scene {
       }
       this.updateSkillHud();
     } else if (this.mode === 'shop') {
-      if (Phaser.Input.Keyboard.JustDown(this.leftKey)) {
+      if (Phaser.Input.Keyboard.JustDown(this.tKey)) {
+        this.showSkillTree();
+      } else if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.showPlaying();
+      } else if (Phaser.Input.Keyboard.JustDown(this.leftKey)) {
         this.scrollShop(1);
       } else if (Phaser.Input.Keyboard.JustDown(this.rightKey)) {
         this.scrollShop(-1);
@@ -207,6 +226,7 @@ export class GameScene extends Phaser.Scene {
     this.enemyMaxHp = ENEMY_MAX_HP;
     this.enemyHp = this.enemyMaxHp;
     this.enemyVariantIndex = 0;
+    this.isRareEnemy = Math.random() < RARE_ENEMY_CHANCE;
     this.lastSkillAt = -SKILL_COOLDOWN;
     this.lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
     this.lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
@@ -225,6 +245,7 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
     this.weaponIndex = 1;
+    this.selectedSkillByBranch = [undefined, undefined, undefined];
     this.purchasedWeapons.clear();
     this.purchasedWeapons.add(1);
     this.weaponDurability.clear();
@@ -244,7 +265,7 @@ export class GameScene extends Phaser.Scene {
     this.addText(GAME_WIDTH / 2, 235, '敵を倒して、お金を集めよう', 28, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 300, '目標：10,000円のクリアチケットを購入する', 22, '#457b9d').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 360, 'SPACEキーを1秒長押し：自動モード', 22, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 405, '1 / 2 / 3：スキル　　E：ショップ', 22, '#264653').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 405, '1 / 2 / 3：スキル  E：ショップ  T：スキルツリー', 22, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 450, '敵を倒すとお金を獲得、HPが一部回復', 20, '#457b9d').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 560, 'スペースキーで開始', 30, '#e76f51').setOrigin(0.5);
   }
@@ -258,7 +279,7 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
     this.addPotionSlot();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'E: ショップ    T: スキルツリー    5: ポーション', 24, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
     this.startEnemyAttackTimer();
   }
@@ -577,7 +598,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private attack(interval: number): void {
-    if (!this.enemyAlive || this.time.now - this.lastAttackAt < interval) {
+    if (!this.enemyAlive || this.time.now - this.lastAttackAt < Math.min(interval, this.getPlayerAttackInterval())) {
       return;
     }
     this.lastAttackAt = this.time.now;
@@ -585,6 +606,12 @@ export class GameScene extends Phaser.Scene {
     const attackDamage = this.getAttackDamage(this.getPlayerAttackPower());
     this.applyDamage(attackDamage, '#f4d35e');
     this.applyWeaponEffects(true, attackDamage);
+    if (this.selectedSkillByBranch.includes(6) && Math.random() < 0.1 && this.enemyAlive) {
+      this.applyDamage(attackDamage, '#f4d35e');
+    }
+    if (this.selectedSkillByBranch.includes(5)) {
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 3);
+    }
     this.consumeWeaponDurability();
   }
 
@@ -709,7 +736,27 @@ export class GameScene extends Phaser.Scene {
 
   private getPlayerAttackPower(): number {
     const baseAttackPower = WEAPONS[this.weaponIndex].attackPower;
-    return WEAPONS[this.weaponIndex].name === '破砕の剣' ? baseAttackPower * 1.25 : baseAttackPower;
+    const weaponPower = WEAPONS[this.weaponIndex].name === '破砕の剣' ? baseAttackPower * 1.25 : baseAttackPower;
+    return weaponPower + this.getSelectedSkillAttackBonus();
+  }
+
+  private getPlayerAttackInterval(): number {
+    return this.getSelectedSkillId(1) === 4 ? Math.max(50, Math.floor(PLAYER_ATTACK_INTERVAL * 0.75)) : PLAYER_ATTACK_INTERVAL;
+  }
+
+  private getSelectedSkillId(branch: number): number | undefined {
+    return this.selectedSkillByBranch[branch];
+  }
+
+  private getSelectedSkillAttackBonus(): number {
+    return this.selectedSkillByBranch.reduce<number>((sum, id) => sum + (id === 1 ? 5 : id === 9 ? 10 : 0), 0);
+  }
+
+  private getEnemyRewardMultiplier(): number {
+    let multiplier = 1;
+    if (this.selectedSkillByBranch.includes(2)) multiplier *= 1.25;
+    if (this.selectedSkillByBranch.includes(7)) multiplier *= 1.10;
+    return multiplier;
   }
 
   private getAttackDamage(baseDamage: number): number {
@@ -859,14 +906,18 @@ export class GameScene extends Phaser.Scene {
   private defeatEnemy(): void {
     this.enemyAlive = false;
     this.stopDamageOverTime();
-    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL);
+    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL + (this.selectedSkillByBranch.includes(3) ? 20 : 0));
     const reward = this.getEnemyReward();
     this.money += reward;
     this.showFloatingText(`+${reward}円`, '#f4d35e', 640);
     this.defeatedCount += 1;
     if (this.defeatedCount % KILLS_PER_LEVEL === 0 && this.level < 3) {
       this.level += 1;
+      this.money += 100;
+      this.playerMaxHp += 20;
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 20);
       this.showLevelUpEffect();
+      this.showFloatingText('+100円  攻撃力+20  最大HP+20', '#f4d35e', 640);
     }
     this.enemyMaxHp += ENEMY_HP_INCREASE;
     this.updateHud();
@@ -880,6 +931,7 @@ export class GameScene extends Phaser.Scene {
         this.enemyHp = this.enemyMaxHp;
         this.enemyAlive = true;
         this.chooseNextEnemyVariant();
+        this.isRareEnemy = Math.random() < RARE_ENEMY_CHANCE;
         this.drawCombatants();
         this.updateHud();
       },
@@ -1038,6 +1090,7 @@ export class GameScene extends Phaser.Scene {
       `レベル: ${this.level}  撃破数: ${this.defeatedCount}`,
       `所持金: ${this.money}円`,
       `装備中: ${WEAPONS[this.weaponIndex].name} (攻撃力 ${this.getPlayerAttackPower()})`,
+      `スキル: ${this.getSelectedSkillNames()}`,
     ]);
     this.progressText?.setText(`次のレベルまで: ${KILLS_PER_LEVEL - (this.defeatedCount % KILLS_PER_LEVEL)}体`);
     this.playerHpBar?.setSize(300 * (this.playerHp / this.playerMaxHp), 24);
@@ -1063,12 +1116,14 @@ export class GameScene extends Phaser.Scene {
   private getEnemyAttackPower(): number {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
     const attackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
-    return this.defensePotionActive ? Math.max(1, Math.floor(attackPower / 2)) : attackPower;
+    const skillReduced = this.selectedSkillByBranch.includes(8) ? Math.max(1, Math.floor(attackPower * 0.9)) : attackPower;
+    return this.defensePotionActive ? Math.max(1, Math.floor(skillReduced / 2)) : skillReduced;
   }
 
   private getEnemyReward(): number {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
-    return variant.reward;
+    const reward = variant.reward * this.getEnemyRewardMultiplier();
+    return this.isRareEnemy ? reward * RARE_ENEMY_REWARD_MULTIPLIER : reward;
   }
 
   private updateSkillHud(): void {
@@ -1416,6 +1471,81 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  private getSelectedSkillNames(): string {
+    const names = this.selectedSkillByBranch.map((id) => id === undefined ? 'なし' : this.getSkillTreeData()[id].name);
+    return names.join(' / ');
+  }
+
+  private getSkillTreeData(): Array<{ id: number; branch: number; name: string; description: string }> {
+    return [
+      { id: 0, branch: 0, name: '生命強化', description: '最大HP +50' },
+      { id: 1, branch: 0, name: '剛力', description: '攻撃力 +5' },
+      { id: 2, branch: 0, name: '強欲', description: '報酬 +25%' },
+      { id: 3, branch: 0, name: '再生', description: '敵撃破回復 +20' },
+      { id: 4, branch: 1, name: '俊足', description: '通常攻撃間隔 -25%' },
+      { id: 5, branch: 1, name: '吸血', description: '通常攻撃でHP +3' },
+      { id: 6, branch: 1, name: '会心', description: '10%でダメージ2倍' },
+      { id: 7, branch: 2, name: '幸運', description: '撃破報酬 +10%' },
+      { id: 8, branch: 2, name: '鉄壁', description: '敵攻撃力 -10%' },
+      { id: 9, branch: 2, name: '王者', description: '攻撃力 +10 / 最大HP +50' },
+    ];
+  }
+
+  private showSkillTree(): void {
+    this.mode = 'shop';
+    this.pauseTimers();
+    this.clearScreen();
+    const panel = this.addScreenObject(this.add.rectangle(640, 360, 1180, 650, 0xf8f9fa));
+    panel.setStrokeStyle(5, 0x2a9d8f, 1);
+    this.addText(640, 55, 'スキルツリー', 44, '#264653').setOrigin(0.5);
+    this.addText(640, 92, '3つの枝から各1個を選択。別のスキルを押せば変更できます。', 18, '#457b9d').setOrigin(0.5);
+
+    const data = this.getSkillTreeData();
+    const branchX = [250, 640, 1030];
+    const groups = [
+      data.filter((skill) => skill.branch === 0),
+      data.filter((skill) => skill.branch === 1),
+      data.filter((skill) => skill.branch === 2),
+    ];
+
+    groups.forEach((group, branch) => {
+      this.addText(branchX[branch], 135, `枝 ${branch + 1}`, 24, '#2a9d8f').setOrigin(0.5);
+      group.forEach((skill, index) => {
+        const y = 205 + index * 95;
+        const selected = this.selectedSkillByBranch[branch] === skill.id;
+        const button = this.addScreenObject(this.add.rectangle(branchX[branch], y, 300, 78, selected ? 0x2a9d8f : 0xffffff));
+        button.setStrokeStyle(3, selected ? 0xf4d35e : 0xd9e2ec, 1);
+        button.setInteractive({ useHandCursor: true });
+        button.on('pointerdown', () => this.selectSkillTreeSkill(skill.id));
+        this.skillTreeObjects.push(button);
+        const title = this.addText(branchX[branch], y - 17, skill.name, 21, selected ? '#ffffff' : '#264653').setOrigin(0.5);
+        const desc = this.addText(branchX[branch], y + 16, skill.description, 15, selected ? '#ffffff' : '#457b9d').setOrigin(0.5);
+        this.skillTreeObjects.push(title, desc);
+      });
+    });
+
+    const back = this.addScreenObject(this.add.rectangle(640, 645, 260, 50, 0x457b9d));
+    back.setInteractive({ useHandCursor: true });
+    back.on('pointerdown', () => this.showPlaying());
+    this.addText(640, 645, '戻る (ESC)', 22, '#ffffff').setOrigin(0.5);
+  }
+
+  private selectSkillTreeSkill(skillId: number): void {
+    const skill = this.getSkillTreeData()[skillId];
+    if (!skill) return;
+    const previous = this.selectedSkillByBranch[skill.branch];
+    this.selectedSkillByBranch[skill.branch] = skillId;
+
+    if (skillId === 0 && previous !== 0) this.playerMaxHp += 50;
+    if (previous === 0 && skillId !== 0) this.playerMaxHp = Math.max(this.playerHp, this.playerMaxHp - 50);
+    if (skillId === 9 && previous !== 9) this.playerMaxHp += 50;
+    if (previous === 9 && skillId !== 9) this.playerMaxHp = Math.max(this.playerHp, this.playerMaxHp - 50);
+    if (skillId === 3 && previous !== 3) this.showFloatingText('撃破回復 +20', '#57cc99', 640);
+
+    this.playerHp = Math.min(this.playerHp, this.playerMaxHp);
+    this.showSkillTree();
+  }
+
   private drawShopIcon(x: number, y: number, itemIndex: number, itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket'): Phaser.GameObjects.Graphics {
     const icon = this.addScreenObject(this.add.graphics());
     icon.setPosition(x, y);
@@ -1517,19 +1647,19 @@ export class GameScene extends Phaser.Scene {
     if (this.enemyAlive) {
       const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
       if (variant.shape === 'slime') {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.ellipse(640, 390, 220, 190, variant.bodyColor)));
-        this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 370, 14, variant.headColor)));
-        this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 370, 14, variant.headColor)));
+        this.enemyVisuals.push(this.addEnemyVisual(this.add.ellipse(640, 390, 220, 190, this.isRareEnemy ? 0xf4d35e : variant.bodyColor)));
+        this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 370, 14, this.isRareEnemy ? 0xffd166 : variant.headColor)));
+        this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 370, 14, this.isRareEnemy ? 0xffd166 : variant.headColor)));
       } else if (variant.shape === 'golem') {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 410, 220, 210, variant.bodyColor)));
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 270, 180, 100, variant.headColor)));
+        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 410, 220, 210, this.isRareEnemy ? 0xf4d35e : variant.bodyColor)));
+        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 270, 180, 100, this.isRareEnemy ? 0xffd166 : variant.headColor)));
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 270, 12, 0x212529)));
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 270, 12, 0x212529)));
       } else {
-        const goblinBody = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, variant.bodyColor));
-        const goblinHead = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, variant.headColor));
-        const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, 530, 225, 565, 255, 595, 225, variant.bodyColor));
-        const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, 685, 225, 715, 255, 750, 225, variant.bodyColor));
+        const goblinBody = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, this.isRareEnemy ? 0xf4d35e : variant.bodyColor));
+        const goblinHead = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, this.isRareEnemy ? 0xffd166 : variant.headColor));
+        const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, 530, 225, 565, 255, 595, 225, this.isRareEnemy ? 0xf4d35e : variant.bodyColor));
+        const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, 685, 225, 715, 255, 750, 225, this.isRareEnemy ? 0xf4d35e : variant.bodyColor));
         const leftEarInner = this.addEnemyVisual(this.add.triangle(565, 267, 548, 240, 565, 252, 582, 240, 0xffadad));
         const rightEarInner = this.addEnemyVisual(this.add.triangle(715, 267, 698, 240, 715, 252, 732, 240, 0xffadad));
         const leftEye = this.addEnemyVisual(this.add.ellipse(610, 290, 34, 26, 0xf8f9fa));
@@ -1580,7 +1710,7 @@ export class GameScene extends Phaser.Scene {
           beltBuckle,
         );
       }
-      const enemyName = this.addText(640, 520, variant.name, 26, '#ffffff').setOrigin(0.5);
+      const enemyName = this.addText(640, 520, this.isRareEnemy ? `★ 金色${variant.name} ★` : variant.name, 26, this.isRareEnemy ? '#f4d35e' : '#ffffff').setOrigin(0.5);
       enemyName.setStroke('#264653', 4);
       this.addCombatObject(enemyName);
     } else {
@@ -1702,6 +1832,7 @@ export class GameScene extends Phaser.Scene {
     this.skillButtons = [];
     this.skillButtonIcons = [];
     this.skillCooldownRings = [];
+    this.skillTreeObjects = [];
     this.confirmationObjects = [];
     this.pendingPurchase = undefined;
     this.playerHpBar = undefined;
@@ -1717,6 +1848,7 @@ export class GameScene extends Phaser.Scene {
     this.defensePotionCountText = undefined;
     this.confusionPotionCountText = undefined;
     this.potionSlotPanels = [];
+    this.skillTreeObjects = [];
   }
 
   private addText(x: number, y: number, text: string, fontSize: number, color: string): Phaser.GameObjects.Text {
