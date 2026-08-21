@@ -27,7 +27,7 @@ import {
   WEAPONS,
 } from '../game/constants';
 
-type GameMode = 'title' | 'playing' | 'shop' | 'gameOver' | 'clear';
+type GameMode = 'title' | 'playing' | 'paused' | 'shop' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment' | 'potion';
 
 export class GameScene extends Phaser.Scene {
@@ -89,6 +89,7 @@ export class GameScene extends Phaser.Scene {
   private skillButtonIcons: Phaser.GameObjects.Graphics[] = [];
   private skillCooldownRings: Phaser.GameObjects.Graphics[] = [];
   private confirmationObjects: Phaser.GameObjects.GameObject[] = [];
+  private pauseOverlayObjects: Phaser.GameObjects.GameObject[] = [];
   private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
@@ -136,7 +137,18 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    if (this.mode === 'paused') {
+      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.hidePause();
+      }
+      return;
+    }
+
     if (this.mode === 'playing') {
+      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.showPause();
+        return;
+      }
       if (this.autoMode) {
         if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
           this.autoMode = false;
@@ -244,6 +256,33 @@ export class GameScene extends Phaser.Scene {
     this.autoModeText.setStroke('#264653', 4);
     this.updateAutoModeText();
     this.startEnemyAttackTimer();
+  }
+
+  private showPause(): void {
+    this.mode = 'paused';
+    this.pauseTimers();
+    const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55));
+    overlay.setInteractive();
+    this.pauseOverlayObjects.push(overlay);
+    const pauseText = this.addScreenObject(this.add.text(640, 360, 'pause', {
+      fontFamily: 'sans-serif',
+      fontSize: '64px',
+      color: '#ffffff',
+    }).setOrigin(0.5));
+    this.pauseOverlayObjects.push(pauseText);
+  }
+
+  private hidePause(): void {
+    for (const object of this.pauseOverlayObjects) {
+      const index = this.screenObjects.indexOf(object);
+      if (index >= 0) {
+        this.screenObjects.splice(index, 1);
+      }
+      object.destroy();
+    }
+    this.pauseOverlayObjects = [];
+    this.mode = 'playing';
+    this.resumeTimers();
   }
 
   private showShop(category: ShopCategory = this.shopCategory): void {
@@ -449,6 +488,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
     this.confirmationObjects = [];
+    this.pauseOverlayObjects = [];
     this.pendingPurchase = undefined;
     for (const button of this.shopButtons) {
       if (button.input) {
