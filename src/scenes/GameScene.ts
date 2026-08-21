@@ -234,10 +234,10 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionBaseMaxHp = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
-    this.weaponIndex = 0;
+    this.weaponIndex = 1;
     this.purchasedWeapons.clear();
     this.weaponDurability.clear();
-    this.weaponDurability.set(0, WEAPONS[0].durability);
+    this.weaponDurability.set(1, WEAPONS[1].durability);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -869,9 +869,60 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'gameOver';
     this.stopTimers();
     this.clearScreen();
-    this.addText(GAME_WIDTH / 2, 280, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#264653').setOrigin(0.5);
+    this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 1));
+    const topWarning = this.addScreenObject(this.add.rectangle(640, 112, 1280, 8, 0xe63946, 0));
+    const bottomWarning = this.addScreenObject(this.add.rectangle(640, 608, 1280, 8, 0xe63946, 0));
+    const panel = this.addScreenObject(this.add.rectangle(640, 300, 700, 230, 0x0b1118, 0));
+    panel.setStrokeStyle(5, 0xe63946, 0);
+    const title = this.addText(GAME_WIDTH / 2, 240, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
+    title.setAlpha(0);
+    const restartText = this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#ffffff').setOrigin(0.5);
+    restartText.setAlpha(0);
+    const exitText = this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#d9e2ec').setOrigin(0.5);
+    exitText.setAlpha(0);
+    this.cameras.main.shake(350, 0.012);
+    this.cameras.main.flash(280, 130, 20, 20);
+    this.tweens.add({ targets: [topWarning, bottomWarning], alpha: 0.9, duration: 350, delay: 120, ease: 'Cubic.easeOut' });
+    this.tweens.add({ targets: panel, alpha: 0.98, duration: 450, delay: 180, ease: 'Cubic.easeOut' });
+    this.tweens.add({
+      targets: panel,
+      scaleX: 1.04,
+      scaleY: 1.04,
+      duration: 700,
+      delay: 550,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: [topWarning, bottomWarning],
+      alpha: 0.3,
+      duration: 650,
+      delay: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({
+      targets: title,
+      y: 280,
+      alpha: 1,
+      duration: 650,
+      delay: 250,
+      ease: 'Back.easeOut',
+    });
+    this.tweens.add({
+      targets: title,
+      scaleX: 1.05,
+      scaleY: 1.05,
+      duration: 900,
+      delay: 900,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.tweens.add({ targets: restartText, alpha: 1, duration: 450, delay: 850 });
+    this.tweens.add({ targets: exitText, alpha: 1, duration: 450, delay: 1050 });
   }
 
   private showClear(): void {
@@ -1361,8 +1412,42 @@ export class GameScene extends Phaser.Scene {
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 270, 12, 0x212529)));
         this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 270, 12, 0x212529)));
       } else {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 400, 170, 180, variant.bodyColor)));
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.circle(640, 280, 55, variant.headColor)));
+        const goblinBody = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, variant.bodyColor));
+        const goblinHead = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, variant.headColor));
+        const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, 530, 225, 565, 255, 595, 225, variant.bodyColor));
+        const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, 685, 225, 715, 255, 750, 225, variant.bodyColor));
+        const leftEarInner = this.addEnemyVisual(this.add.triangle(565, 267, 548, 240, 565, 252, 582, 240, 0xffadad));
+        const rightEarInner = this.addEnemyVisual(this.add.triangle(715, 267, 698, 240, 715, 252, 732, 240, 0xffadad));
+        const leftEye = this.addEnemyVisual(this.add.ellipse(610, 290, 34, 26, 0xf8f9fa));
+        const rightEye = this.addEnemyVisual(this.add.ellipse(670, 290, 34, 26, 0xf8f9fa));
+        const leftPupil = this.addEnemyVisual(this.add.circle(615, 292, 8, 0x212529));
+        const rightPupil = this.addEnemyVisual(this.add.circle(665, 292, 8, 0x212529));
+        const nose = this.addEnemyVisual(this.add.triangle(640, 305, 625, 330, 655, 330, 640, 290, 0xe9c46a));
+        const mouth = this.addEnemyVisual(this.add.rectangle(640, 355, 72, 24, 0x212529));
+        const toothLeft = this.addEnemyVisual(this.add.triangle(630, 356, 620, 350, 640, 350, 630, 365, 0xf8f9fa));
+        const toothRight = this.addEnemyVisual(this.add.triangle(650, 356, 640, 350, 660, 350, 650, 365, 0xf8f9fa));
+        const shoulderArmor = this.addEnemyVisual(this.add.rectangle(640, 385, 120, 36, 0x495057));
+        const belt = this.addEnemyVisual(this.add.rectangle(640, 450, 125, 18, 0x6d597a));
+        const beltBuckle = this.addEnemyVisual(this.add.rectangle(640, 450, 18, 18, 0xf4d35e));
+        this.enemyVisuals.push(
+          goblinBody,
+          goblinHead,
+          leftEar,
+          rightEar,
+          leftEarInner,
+          rightEarInner,
+          leftEye,
+          rightEye,
+          leftPupil,
+          rightPupil,
+          nose,
+          mouth,
+          toothLeft,
+          toothRight,
+          shoulderArmor,
+          belt,
+          beltBuckle,
+        );
       }
       const enemyName = this.addText(640, 520, variant.name, 26, '#ffffff').setOrigin(0.5);
       enemyName.setStroke('#264653', 4);
