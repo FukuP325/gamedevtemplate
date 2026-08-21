@@ -21,6 +21,9 @@ import {
   POTION_PRICE,
   STRENGTH_POTION_PRICE,
   WEAKNESS_POTION_PRICE,
+  HEALTH_POTION_PRICE,
+  DEFENSE_POTION_PRICE,
+  CONFUSION_POTION_PRICE,
   RAPID_SKILL_COOLDOWN,
   SKILL_COOLDOWN,
   SKILL_DAMAGE_MULTIPLIER,
@@ -43,7 +46,14 @@ export class GameScene extends Phaser.Scene {
   private potionCount = 1;
   private strengthPotionCount = 1;
   private weaknessPotionCount = 1;
+  private healthPotionCount = 1;
+  private defensePotionCount = 1;
+  private defensePotionActive = false;
+  private confusionPotionCount = 0;
+  private enemyConfused = false;
   private strengthPotionAttacksRemaining = 0;
+  private healthPotionBaseMaxHp?: number;
+  private healthPotionTimer?: Phaser.Time.TimerEvent;
   private weaponIndex = 0;
   private purchasedWeapons = new Set<number>();
   private purchasedEquipments = new Set<number>();
@@ -82,6 +92,9 @@ export class GameScene extends Phaser.Scene {
   private potionCountText?: Phaser.GameObjects.Text;
   private strengthPotionCountText?: Phaser.GameObjects.Text;
   private weaknessPotionCountText?: Phaser.GameObjects.Text;
+  private healthPotionCountText?: Phaser.GameObjects.Text;
+  private defensePotionCountText?: Phaser.GameObjects.Text;
+  private confusionPotionCountText?: Phaser.GameObjects.Text;
   private potionSlotPanels: Phaser.GameObjects.Rectangle[] = [];
   private progressText?: Phaser.GameObjects.Text;
   private clearProgressBar?: Phaser.GameObjects.Rectangle;
@@ -207,7 +220,15 @@ export class GameScene extends Phaser.Scene {
     this.potionCount = 1;
     this.strengthPotionCount = 1;
     this.weaknessPotionCount = 1;
+    this.healthPotionCount = 1;
+    this.defensePotionCount = 1;
+    this.defensePotionActive = false;
+    this.confusionPotionCount = 0;
+    this.enemyConfused = false;
     this.strengthPotionAttacksRemaining = 0;
+    this.healthPotionBaseMaxHp = undefined;
+    this.healthPotionTimer?.remove();
+    this.healthPotionTimer = undefined;
     this.weaponIndex = 0;
     this.purchasedWeapons.clear();
     this.purchasedEquipments.clear();
@@ -279,6 +300,9 @@ export class GameScene extends Phaser.Scene {
           { name: '回復ポーション', effect: 'HPを全回復', attackPower: 0, price: POTION_PRICE, kind: 'potion' as const },
           { name: '力のポーション', effect: '攻撃力をだんだん上げる', attackPower: 0, price: STRENGTH_POTION_PRICE, kind: 'potion' as const },
           { name: '弱体化ポーション', effect: '敵のHPを下げる', attackPower: 0, price: WEAKNESS_POTION_PRICE, kind: 'potion' as const },
+          { name: '体力のポーション', effect: 'HPを1.5倍にする（5分）', attackPower: 0, price: HEALTH_POTION_PRICE, kind: 'potion' as const },
+          { name: '守りのポーション', effect: '防御力を上げる', attackPower: 0, price: DEFENSE_POTION_PRICE, kind: 'potion' as const },
+          { name: '混乱のポーション', effect: '敵を混乱させる', attackPower: 0, price: CONFUSION_POTION_PRICE, kind: 'potion' as const },
         ];
     this.shopItemCount = items.length;
     items.forEach((item, index) => {
@@ -388,16 +412,24 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (itemKind === 'potion') {
-      if (this.money < POTION_PRICE) {
+      const potionPrices = [POTION_PRICE, STRENGTH_POTION_PRICE, WEAKNESS_POTION_PRICE, HEALTH_POTION_PRICE, DEFENSE_POTION_PRICE, CONFUSION_POTION_PRICE];
+      const price = potionPrices[itemIndex] ?? POTION_PRICE;
+      if (this.money < price) {
         return;
       }
-      this.money -= POTION_PRICE;
+      this.money -= price;
       if (itemIndex === 0) {
         this.potionCount += 1;
       } else if (itemIndex === 1) {
         this.strengthPotionCount += 1;
-      } else {
+      } else if (itemIndex === 2) {
         this.weaknessPotionCount += 1;
+      } else if (itemIndex === 3) {
+        this.healthPotionCount += 1;
+      } else if (itemIndex === 4) {
+        this.defensePotionCount += 1;
+      } else {
+        this.confusionPotionCount += 1;
       }
       this.showShop('potion');
       return;
@@ -546,6 +578,50 @@ export class GameScene extends Phaser.Scene {
     this.showFloatingText('敵のHP -25%', '#cdb4db', 640);
   }
 
+  private useHealthPotion(): void {
+    if (this.healthPotionCount <= 0) {
+      return;
+    }
+    this.healthPotionCount -= 1;
+    if (this.healthPotionBaseMaxHp === undefined) {
+      this.healthPotionBaseMaxHp = this.playerMaxHp;
+      this.playerMaxHp *= 1.5;
+      this.playerHp *= 1.5;
+    }
+    this.healthPotionTimer?.remove();
+    this.healthPotionTimer = this.time.delayedCall(5 * 60 * 1000, () => {
+      if (this.healthPotionBaseMaxHp !== undefined) {
+        this.playerMaxHp = this.healthPotionBaseMaxHp;
+        this.playerHp = Math.min(this.playerHp, this.playerMaxHp);
+        this.healthPotionBaseMaxHp = undefined;
+        this.updateHud();
+      }
+      this.healthPotionTimer = undefined;
+    });
+    this.showFloatingText('最大HP 1.5倍（5分）', '#57cc99', 1215);
+    this.updateHud();
+  }
+
+  private useDefensePotion(): void {
+    if (this.defensePotionCount <= 0 || this.defensePotionActive) {
+      return;
+    }
+    this.defensePotionCount -= 1;
+    this.defensePotionActive = true;
+    this.showFloatingText('敵の攻撃力 1/2', '#457b9d', 1230);
+    this.updateHud();
+  }
+
+  private useConfusionPotion(): void {
+    if (this.confusionPotionCount <= 0 || this.enemyConfused) {
+      return;
+    }
+    this.confusionPotionCount -= 1;
+    this.enemyConfused = true;
+    this.showFloatingText('敵が混乱した', '#cdb4db', 640);
+    this.updateHud();
+  }
+
   private getPlayerAttackPower(): number {
     return WEAPONS[this.weaponIndex].attackPower;
   }
@@ -640,6 +716,10 @@ export class GameScene extends Phaser.Scene {
     if (this.mode !== 'playing' || !this.enemyAlive) {
       return;
     }
+    if (this.enemyConfused && Math.random() < 0.5) {
+      this.showFloatingText('攻撃 miss', '#cdb4db', 640);
+      return;
+    }
     this.playerHp = Math.max(0, this.playerHp - this.getEnemyAttackPower());
     this.cameras.main.flash(120, 230, 80, 80);
     this.tweens.add({
@@ -731,16 +811,23 @@ export class GameScene extends Phaser.Scene {
     this.potionCountText?.setText(`× ${this.potionCount}`);
     this.strengthPotionCountText?.setText(`× ${this.strengthPotionCount}`);
     this.weaknessPotionCountText?.setText(`× ${this.weaknessPotionCount}`);
+    this.healthPotionCountText?.setText(`× ${this.healthPotionCount}`);
+    this.defensePotionCountText?.setText(`× ${this.defensePotionCount}`);
+    this.confusionPotionCountText?.setText(`× ${this.confusionPotionCount}`);
     this.clearProgressBar?.setSize(300 * Math.min(1, this.money / CLEAR_TICKET_PRICE), 12);
     this.potionSlotPanels[0]?.setFillStyle(this.potionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[1]?.setFillStyle(this.strengthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[2]?.setFillStyle(this.weaknessPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[3]?.setFillStyle(this.healthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[4]?.setFillStyle(this.defensePotionCount > 0 && !this.defensePotionActive ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[5]?.setFillStyle(this.confusionPotionCount > 0 && !this.enemyConfused ? 0xf8f9fa : 0xadb5bd);
     this.updateSkillHud();
   }
 
   private getEnemyAttackPower(): number {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
-    return variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+    const attackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+    return this.defensePotionActive ? Math.max(1, Math.floor(attackPower / 2)) : attackPower;
   }
 
   private getEnemyReward(): number {
@@ -776,12 +863,15 @@ export class GameScene extends Phaser.Scene {
 
   private addPotionSlot(): void {
     const slots = [
-      { x: 1045, name: '回復', count: this.potionCount, color: 0xe76f51, action: () => this.usePotion() },
-      { x: 1130, name: '力', count: this.strengthPotionCount, color: 0xf4d35e, action: () => this.useStrengthPotion() },
-      { x: 1215, name: '弱体', count: this.weaknessPotionCount, color: 0xcdb4db, action: () => this.useWeaknessPotion() },
+      { x: 930, name: '回復', count: this.potionCount, color: 0xe76f51, action: () => this.usePotion() },
+      { x: 990, name: '力', count: this.strengthPotionCount, color: 0xf4d35e, action: () => this.useStrengthPotion() },
+      { x: 1050, name: '弱体', count: this.weaknessPotionCount, color: 0xcdb4db, action: () => this.useWeaknessPotion() },
+      { x: 1110, name: '体力', count: this.healthPotionCount, color: 0x57cc99, action: () => this.useHealthPotion() },
+      { x: 1170, name: '守り', count: this.defensePotionCount, color: 0x457b9d, action: () => this.useDefensePotion() },
+      { x: 1230, name: '混乱', count: this.confusionPotionCount, color: 0x6d597a, action: () => this.useConfusionPotion() },
     ];
     for (const slot of slots) {
-      const panel = this.addScreenObject(this.add.rectangle(slot.x, 555, 75, 100, 0xf8f9fa));
+      const panel = this.addScreenObject(this.add.rectangle(slot.x, 555, 55, 100, 0xf8f9fa));
       panel.setStrokeStyle(3, 0xd9e2ec, 1);
       panel.setInteractive({ useHandCursor: true });
       panel.on('pointerdown', slot.action);
@@ -801,8 +891,14 @@ export class GameScene extends Phaser.Scene {
         this.potionCountText = countText;
       } else if (slot.name === '力') {
         this.strengthPotionCountText = countText;
-      } else {
+      } else if (slot.name === '弱体') {
         this.weaknessPotionCountText = countText;
+      } else if (slot.name === '体力') {
+        this.healthPotionCountText = countText;
+      } else if (slot.name === '守り') {
+        this.defensePotionCountText = countText;
+      } else {
+        this.confusionPotionCountText = countText;
       }
     }
   }
@@ -1100,7 +1196,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (itemKind === 'potion') {
-      const potionColors = [0xe76f51, 0xf4d35e, 0xcdb4db];
+      const potionColors = [0xe76f51, 0xf4d35e, 0xcdb4db, 0x57cc99, 0x457b9d, 0x6d597a];
       icon.fillStyle(potionColors[itemIndex] ?? 0xe76f51, 1);
       icon.fillRoundedRect(-24, -32, 48, 64, 8);
       icon.fillStyle(0x8d99ae, 1);
@@ -1189,6 +1285,9 @@ export class GameScene extends Phaser.Scene {
     if (this.respawnTimer) {
       this.respawnTimer.paused = false;
     }
+    if (this.healthPotionTimer) {
+      this.healthPotionTimer.paused = false;
+    }
   }
 
   private pauseTimers(): void {
@@ -1197,6 +1296,9 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.respawnTimer) {
       this.respawnTimer.paused = true;
+    }
+    if (this.healthPotionTimer) {
+      this.healthPotionTimer.paused = true;
     }
   }
 
@@ -1209,6 +1311,8 @@ export class GameScene extends Phaser.Scene {
     this.stopEnemyAttackTimer();
     this.respawnTimer?.remove();
     this.respawnTimer = undefined;
+    this.healthPotionTimer?.remove();
+    this.healthPotionTimer = undefined;
   }
 
   private clearScreen(): void {
@@ -1237,6 +1341,9 @@ export class GameScene extends Phaser.Scene {
     this.potionCountText = undefined;
     this.strengthPotionCountText = undefined;
     this.weaknessPotionCountText = undefined;
+    this.healthPotionCountText = undefined;
+    this.defensePotionCountText = undefined;
+    this.confusionPotionCountText = undefined;
     this.potionSlotPanels = [];
   }
 

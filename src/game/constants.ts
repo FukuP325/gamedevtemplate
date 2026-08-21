@@ -21,6 +21,9 @@ export const CLEAR_TICKET_PRICE = 10000;
 export const POTION_PRICE = 100;
 export const STRENGTH_POTION_PRICE = 250;
 export const WEAKNESS_POTION_PRICE = 500;
+export const HEALTH_POTION_PRICE = 600;
+export const DEFENSE_POTION_PRICE = 650;
+export const CONFUSION_POTION_PRICE = 850;
 
 export type Equipment = {
   name: string;
