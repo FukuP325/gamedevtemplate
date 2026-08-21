@@ -54,6 +54,8 @@ export class GameScene extends Phaser.Scene {
   private strengthPotionAttacksRemaining = 0;
   private healthPotionBaseMaxHp?: number;
   private healthPotionTimer?: Phaser.Time.TimerEvent;
+  private damageOverTimeTimer?: Phaser.Time.TimerEvent;
+  private damageOverTimeTicksRemaining = 0;
   private weaponIndex = 0;
   private weaponDurability = new Map<number, number | null>();
   private purchasedWeapons = new Set<number>();
@@ -321,7 +323,10 @@ export class GameScene extends Phaser.Scene {
       this.registerShopObject(name, x);
       if (item.kind === 'weapon') {
         const attackDetails = this.addText(x, 427, `攻撃力: ${item.attackPower}`, 20, '#457b9d').setOrigin(0.5);
-        const durabilityDetails = this.addText(x, 448, `耐久力: ${item.durability ?? 'なし'}${item.durability === null ? '' : '回'}`, 20, '#457b9d').setOrigin(0.5);
+        const durabilityLabel = item.durability === null
+          ? item.name === '邪剣アビス' || item.name === '聖剣エターナル' ? '無限' : 'なし'
+          : `${item.durability}回`;
+        const durabilityDetails = this.addText(x, 448, `耐久力: ${durabilityLabel}`, 20, '#457b9d').setOrigin(0.5);
         const priceDetails = this.addText(x, 468, `${item.price}円`, 20, '#457b9d').setOrigin(0.5);
         this.registerShopObject(attackDetails, x);
         this.registerShopObject(durabilityDetails, x);
@@ -511,7 +516,9 @@ export class GameScene extends Phaser.Scene {
     this.lastAttackAt = this.time.now;
     this.playAttackEffect();
     const attackMultiplier = this.getStrengthPotionMultiplier();
-    this.applyDamage(this.getPlayerAttackPower() * attackMultiplier, '#f4d35e');
+    const attackDamage = this.getPlayerAttackPower() * attackMultiplier;
+    this.applyDamage(attackDamage, '#f4d35e');
+    this.applyWeaponEffects(true, attackDamage);
     if (this.strengthPotionAttacksRemaining > 0) {
       this.strengthPotionAttacksRemaining -= 1;
     }
@@ -525,6 +532,7 @@ export class GameScene extends Phaser.Scene {
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
     this.applyDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER, '#f4d35e');
+    this.applyWeaponEffects(false, this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
     this.consumeWeaponDurability();
   }
 
@@ -537,6 +545,7 @@ export class GameScene extends Phaser.Scene {
     this.time.delayedCall(350, () => {
       if (this.mode === 'playing' && this.enemyAlive) {
         this.applyDamage(this.getPlayerAttackPower() * 7, '#57cc99');
+        this.applyWeaponEffects(false, this.getPlayerAttackPower() * 7);
         this.consumeWeaponDurability();
       }
     });
@@ -633,7 +642,53 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getPlayerAttackPower(): number {
-    return WEAPONS[this.weaponIndex].attackPower;
+    const baseAttackPower = WEAPONS[this.weaponIndex].attackPower;
+    return WEAPONS[this.weaponIndex].name === '破砕の剣' ? baseAttackPower * 1.25 : baseAttackPower;
+  }
+
+  private applyWeaponEffects(isNormalAttack: boolean, attackDamage: number): void {
+    const weaponName = WEAPONS[this.weaponIndex].name;
+    if (weaponName === '邪剣アビス') {
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 5);
+      this.showFloatingText('HP +5', '#57cc99', 400);
+    }
+    if (!isNormalAttack || !this.enemyAlive) {
+      return;
+    }
+    if (weaponName === '神速の剣' && Math.random() < 1 / 3) {
+      this.applyDamage(attackDamage * 2, '#f4d35e');
+    } else if (weaponName === '雷鳴の剣' && Math.random() < 1 / 10) {
+      this.applyDamage(150, '#a8dadc');
+    } else if (weaponName === '天雷の剣' && Math.random() < 1 / 5) {
+      this.applyDamage(200, '#f4d35e');
+    } else if (weaponName === '聖剣エターナル' && Math.random() < 1 / 5) {
+      this.applyDamage(this.enemyHp, '#f8f9fa');
+    }
+    if (weaponName === '炎の剣') {
+      this.startDamageOverTime(10);
+    } else if (weaponName === '業火の剣') {
+      this.startDamageOverTime(30);
+    }
+  }
+
+  private startDamageOverTime(damage: number): void {
+    if (this.damageOverTimeTimer || !this.enemyAlive) {
+      return;
+    }
+    this.damageOverTimeTicksRemaining = 10;
+    this.damageOverTimeTimer = this.time.addEvent({
+      delay: 1000,
+      repeat: 9,
+      callback: () => {
+        if (this.mode === 'playing' && this.enemyAlive) {
+          this.applyDamage(damage, '#e76f51');
+        }
+        this.damageOverTimeTicksRemaining -= 1;
+        if (this.damageOverTimeTicksRemaining <= 0) {
+          this.damageOverTimeTimer = undefined;
+        }
+      },
+    });
   }
 
   private consumeWeaponDurability(): void {
@@ -689,7 +744,9 @@ export class GameScene extends Phaser.Scene {
     }
     this.lastRapidSkillAt = this.time.now;
     this.playRapidEffect();
-    this.applyDamage(this.getPlayerAttackPower() * 5, '#ffadad');
+    const attackDamage = this.getPlayerAttackPower() * 5;
+    this.applyDamage(attackDamage, '#ffadad');
+    this.applyWeaponEffects(false, attackDamage);
     this.consumeWeaponDurability();
   }
 
@@ -727,6 +784,7 @@ export class GameScene extends Phaser.Scene {
 
   private defeatEnemy(): void {
     this.enemyAlive = false;
+    this.stopDamageOverTime();
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL);
     const reward = this.getEnemyReward();
     this.money += reward;
@@ -1339,6 +1397,9 @@ export class GameScene extends Phaser.Scene {
     if (this.healthPotionTimer) {
       this.healthPotionTimer.paused = false;
     }
+    if (this.damageOverTimeTimer) {
+      this.damageOverTimeTimer.paused = false;
+    }
   }
 
   private pauseTimers(): void {
@@ -1350,6 +1411,9 @@ export class GameScene extends Phaser.Scene {
     }
     if (this.healthPotionTimer) {
       this.healthPotionTimer.paused = true;
+    }
+    if (this.damageOverTimeTimer) {
+      this.damageOverTimeTimer.paused = true;
     }
   }
 
@@ -1364,6 +1428,13 @@ export class GameScene extends Phaser.Scene {
     this.respawnTimer = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
+    this.stopDamageOverTime();
+  }
+
+  private stopDamageOverTime(): void {
+    this.damageOverTimeTimer?.remove();
+    this.damageOverTimeTimer = undefined;
+    this.damageOverTimeTicksRemaining = 0;
   }
 
   private clearScreen(): void {
