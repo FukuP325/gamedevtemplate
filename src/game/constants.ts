@@ -19,6 +19,8 @@ export const ENEMY_RESPAWN_MIN = 500;
 export const ENEMY_RESPAWN_MAX = 1000;
 export const CLEAR_TICKET_PRICE = 10000;
 export const POTION_PRICE = 100;
+export const STRENGTH_POTION_PRICE = 250;
+export const WEAKNESS_POTION_PRICE = 500;
 
 export type Equipment = {
   name: string;
@@ -53,14 +55,15 @@ export const ENEMY_VARIANTS: readonly EnemyVariant[] = [
 export type Weapon = {
   name: string;
   attackPower: number;
+  durability: number | null;
   price: number;
 };
 
 export const WEAPONS: readonly Weapon[] = [
-  { name: '駆け出しの剣', attackPower: 10, price: 0 },
-  { name: '鉄の剣', attackPower: 20, price: 150 },
-  { name: '鋼の剣', attackPower: 40, price: 250 },
-  { name: '炎の剣', attackPower: 60, price: 500 },
-  { name: '雷鳴の剣', attackPower: 80, price: 750 },
-  { name: '聖剣エターナル', attackPower: 100, price: 1000 },
+  { name: '駆け出しの剣', attackPower: 10, durability: null, price: 0 },
+  { name: '鉄の剣', attackPower: 20, durability: 30, price: 150 },
+  { name: '鋼の剣', attackPower: 40, durability: 100, price: 250 },
+  { name: '炎の剣', attackPower: 60, durability: 60, price: 500 },
+  { name: '雷鳴の剣', attackPower: 80, durability: 60, price: 750 },
+  { name: '聖剣エターナル', attackPower: 100, durability: null, price: 1000 },
 ];
