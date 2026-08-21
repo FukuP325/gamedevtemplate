@@ -18,6 +18,7 @@ export const ENEMY_DEFEAT_HEAL = 30;
 export const ENEMY_RESPAWN_MIN = 500;
 export const ENEMY_RESPAWN_MAX = 1000;
 export const CLEAR_TICKET_PRICE = 10000;
+export const POTION_PRICE = 100;
 
 export type Equipment = {
   name: string;

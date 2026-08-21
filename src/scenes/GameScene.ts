@@ -18,6 +18,7 @@ import {
   MONEY_PUNCH_COOLDOWN,
   PLAYER_ATTACK_INTERVAL,
   PLAYER_MAX_HP,
+  POTION_PRICE,
   RAPID_SKILL_COOLDOWN,
   SKILL_COOLDOWN,
   SKILL_DAMAGE_MULTIPLIER,
@@ -25,7 +26,7 @@ import {
 } from '../game/constants';
 
 type GameMode = 'title' | 'playing' | 'shop' | 'gameOver' | 'clear';
-type ShopCategory = 'weapon' | 'equipment';
+type ShopCategory = 'weapon' | 'equipment' | 'potion';
 
 export class GameScene extends Phaser.Scene {
   private mode: GameMode = 'title';
@@ -37,6 +38,7 @@ export class GameScene extends Phaser.Scene {
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
   private money = 0;
+  private potionCount = 0;
   private weaponIndex = 0;
   private purchasedWeapons = new Set<number>();
   private purchasedEquipments = new Set<number>();
@@ -53,6 +55,7 @@ export class GameScene extends Phaser.Scene {
   private twoKey!: Phaser.Input.Keyboard.Key;
   private threeKey!: Phaser.Input.Keyboard.Key;
   private fourKey!: Phaser.Input.Keyboard.Key;
+  private fiveKey!: Phaser.Input.Keyboard.Key;
   private leftKey!: Phaser.Input.Keyboard.Key;
   private rightKey!: Phaser.Input.Keyboard.Key;
   private eKey!: Phaser.Input.Keyboard.Key;
@@ -71,13 +74,14 @@ export class GameScene extends Phaser.Scene {
   private autoModeText?: Phaser.GameObjects.Text;
   private enemyAttackText?: Phaser.GameObjects.Text;
   private enemyRewardText?: Phaser.GameObjects.Text;
+  private potionCountText?: Phaser.GameObjects.Text;
   private progressText?: Phaser.GameObjects.Text;
   private clearProgressBar?: Phaser.GameObjects.Rectangle;
   private skillButtons: Phaser.GameObjects.Arc[] = [];
   private skillButtonIcons: Phaser.GameObjects.Graphics[] = [];
   private skillCooldownRings: Phaser.GameObjects.Graphics[] = [];
   private confirmationObjects: Phaser.GameObjects.GameObject[] = [];
-  private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'ticket' };
+  private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
 
@@ -95,11 +99,12 @@ export class GameScene extends Phaser.Scene {
     this.twoKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TWO);
     this.threeKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.THREE);
     this.fourKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR);
+    this.fiveKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FIVE);
     this.leftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
     this.rightKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
     this.eKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
     this.escKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
-    keyboard.addCapture(['SPACE', 'ONE', 'TWO', 'THREE', 'FOUR', 'E', 'ESC', 'LEFT', 'RIGHT']);
+    keyboard.addCapture(['SPACE', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'E', 'ESC', 'LEFT', 'RIGHT']);
     this.showTitle();
   }
 
@@ -157,6 +162,9 @@ export class GameScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.fourKey)) {
         this.useHealSkill();
       }
+      if (Phaser.Input.Keyboard.JustDown(this.fiveKey)) {
+        this.usePotion();
+      }
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         this.showShop();
       }
@@ -188,6 +196,7 @@ export class GameScene extends Phaser.Scene {
     this.autoMode = false;
     this.spaceHoldStartedAt = undefined;
     this.money = 0;
+    this.potionCount = 0;
     this.weaponIndex = 0;
     this.purchasedWeapons.clear();
     this.purchasedEquipments.clear();
@@ -217,7 +226,8 @@ export class GameScene extends Phaser.Scene {
     this.drawHud(true);
     this.drawCombatants();
     this.addSkillButtons();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    E: ショップ', 24, '#ffffff').setOrigin(0.5);
+    this.addPotionSlot();
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'SPACE: 自動モード切替    E: ショップ    5: ポーション', 24, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
     this.autoModeText = this.addText(GAME_WIDTH / 2, 605, '', 24, '#ffffff').setOrigin(0.5);
     this.autoModeText.setStroke('#264653', 4);
@@ -242,13 +252,19 @@ export class GameScene extends Phaser.Scene {
     equipmentTab.setInteractive({ useHandCursor: true });
     equipmentTab.on('pointerdown', () => this.showShop('equipment'));
     this.addText(780, 135, '装備ショップ', 22, '#ffffff').setOrigin(0.5);
+    const potionTab = this.addScreenObject(this.add.rectangle(1060, 135, 260, 48, category === 'potion' ? 0x2a9d8f : 0x53616f));
+    potionTab.setInteractive({ useHandCursor: true });
+    potionTab.on('pointerdown', () => this.showShop('potion'));
+    this.addText(1060, 135, 'ポーションショップ', 22, '#ffffff').setOrigin(0.5);
 
     const items = category === 'weapon'
       ? [
         ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
         { name: 'クリアチケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
       ]
-      : EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 }));
+      : category === 'equipment'
+        ? EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 }))
+        : [{ name: '回復ポーション', attackPower: 0, price: POTION_PRICE, kind: 'potion' as const }];
     this.shopItemCount = items.length;
     items.forEach((item, index) => {
       const x = 180 + index * 290;
@@ -261,6 +277,8 @@ export class GameScene extends Phaser.Scene {
       this.registerShopObject(name, x);
       const detailText = item.kind === 'equipment'
         ? `最大HP +${item.hpBonus}\n${item.price}円`
+        : item.kind === 'potion'
+          ? `HPを全回復\n${item.price}円`
         : item.kind === 'ticket'
           ? `${item.price}円でゲームクリア`
           : `攻撃力: ${item.attackPower}\n${item.price}円`;
@@ -317,7 +335,7 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private purchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'ticket'): void {
+  private purchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket'): void {
     if (itemKind === 'weapon') {
       const weaponIndex = itemIndex + 1;
       const weapon = WEAPONS[weaponIndex];
@@ -346,13 +364,23 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (itemKind === 'potion') {
+      if (this.money < POTION_PRICE) {
+        return;
+      }
+      this.money -= POTION_PRICE;
+      this.potionCount += 1;
+      this.showShop('potion');
+      return;
+    }
+
     if (this.money >= CLEAR_TICKET_PRICE) {
       this.money -= CLEAR_TICKET_PRICE;
       this.showClear();
     }
   }
 
-  private requestPurchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'ticket'): void {
+  private requestPurchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket'): void {
     if (this.confirmationObjects.length > 0) {
       return;
     }
@@ -450,6 +478,18 @@ export class GameScene extends Phaser.Scene {
     this.lastHealSkillAt = this.time.now;
     this.playerHp = this.playerMaxHp;
     this.playHealEffect(recovery);
+    this.updateHud();
+  }
+
+  private usePotion(): void {
+    if (this.potionCount <= 0 || this.playerHp >= this.playerMaxHp) {
+      return;
+    }
+    const recovery = this.playerMaxHp - this.playerHp;
+    this.potionCount -= 1;
+    this.playerHp = this.playerMaxHp;
+    this.playHealEffect(recovery);
+    this.showFloatingText('ポーション使用', '#57cc99', 1085);
     this.updateHud();
   }
 
@@ -624,6 +664,7 @@ export class GameScene extends Phaser.Scene {
     this.enemyHpBar?.setSize(300 * (this.enemyHp / this.enemyMaxHp), 24);
     this.enemyAttackText?.setText(`敵攻撃力: ${this.getEnemyAttackPower()}`);
     this.enemyRewardText?.setText(`撃破報酬: ${this.getEnemyReward()}円`);
+    this.potionCountText?.setText(`× ${this.potionCount}`);
     this.clearProgressBar?.setSize(300 * Math.min(1, this.money / CLEAR_TICKET_PRICE), 12);
     this.updateSkillHud();
   }
@@ -662,6 +703,23 @@ export class GameScene extends Phaser.Scene {
       this.skillCooldownRings.push(ring);
     }
     this.updateSkillButtons();
+  }
+
+  private addPotionSlot(): void {
+    const panel = this.addScreenObject(this.add.rectangle(1130, 555, 180, 100, 0xf8f9fa));
+    panel.setStrokeStyle(4, 0xd9e2ec, 1);
+    const icon = this.addScreenObject(this.add.graphics());
+    icon.setPosition(1085, 555);
+    icon.fillStyle(0xe76f51, 1);
+    icon.fillRoundedRect(-16, -22, 32, 44, 6);
+    icon.fillStyle(0x8d99ae, 1);
+    icon.fillRect(-9, -32, 18, 10);
+    icon.lineStyle(3, 0x264653, 1);
+    icon.strokeRoundedRect(-16, -22, 32, 44, 6);
+    icon.strokeRect(-9, -32, 18, 10);
+    this.addText(1160, 540, 'ポーション', 22, '#264653').setOrigin(0.5);
+    this.potionCountText = this.addText(1160, 575, '', 22, '#457b9d').setOrigin(0.5);
+    this.potionCountText.setText(`× ${this.potionCount}`);
   }
 
   private updateSkillButtons(): void {
@@ -933,7 +991,7 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private drawShopIcon(x: number, y: number, itemIndex: number, itemKind: 'weapon' | 'equipment' | 'ticket'): Phaser.GameObjects.Graphics {
+  private drawShopIcon(x: number, y: number, itemIndex: number, itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket'): Phaser.GameObjects.Graphics {
     const icon = this.addScreenObject(this.add.graphics());
     icon.setPosition(x, y);
     if (itemKind === 'ticket') {
@@ -953,6 +1011,17 @@ export class GameScene extends Phaser.Scene {
       icon.strokeRoundedRect(-32, -40, 64, 80, 12);
       icon.fillStyle(0xf4d35e, 1);
       icon.fillCircle(0, 0, 14);
+      return icon;
+    }
+
+    if (itemKind === 'potion') {
+      icon.fillStyle(0xe76f51, 1);
+      icon.fillRoundedRect(-24, -32, 48, 64, 8);
+      icon.fillStyle(0x8d99ae, 1);
+      icon.fillRect(-14, -44, 28, 12);
+      icon.lineStyle(4, 0x264653, 1);
+      icon.strokeRoundedRect(-24, -32, 48, 64, 8);
+      icon.strokeRect(-14, -44, 28, 12);
       return icon;
     }
 
@@ -1079,6 +1148,7 @@ export class GameScene extends Phaser.Scene {
     this.progressText = undefined;
     this.clearProgressBar = undefined;
     this.enemyAttackText = undefined;
+    this.potionCountText = undefined;
   }
 
   private addText(x: number, y: number, text: string, fontSize: number, color: string): Phaser.GameObjects.Text {
