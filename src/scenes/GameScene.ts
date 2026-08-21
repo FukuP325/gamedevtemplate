@@ -22,9 +22,17 @@ import {
   SKILL_COOLDOWN,
   SKILL_DAMAGE_MULTIPLIER,
   WEAPONS,
+  RARE_ENEMY_CHANCE,
+  RARE_ENEMY_REWARD_MULTIPLIER,
+  RARE_ENEMY_COLOR,
+  RARE_ENEMY_HEAD_COLOR,
 } from '../game/constants';
+import {
+  SKILL_TREE,
+  type SkillTreeSkill,
+} from '../game/SkillTree';
 
-type GameMode = 'title' | 'playing' | 'shop' | 'gameOver' | 'clear';
+type GameMode = 'title' | 'playing' | 'shop' | 'skillTree' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment';
 
 export class GameScene extends Phaser.Scene {
@@ -40,10 +48,12 @@ export class GameScene extends Phaser.Scene {
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
 
+  // レアキャラ
+  private enemyIsRare = false;
+
   private money = 0;
 
   private weaponIndex = 0;
-  private bonusAttackPower = 0;
 
   private purchasedWeapons = new Set<number>();
   private purchasedEquipments = new Set<number>();
@@ -51,6 +61,7 @@ export class GameScene extends Phaser.Scene {
   private enemyAlive = true;
 
   private lastAttackAt = -PLAYER_ATTACK_INTERVAL;
+
   private autoMode = false;
   private spaceHoldStartedAt?: number;
 
@@ -58,6 +69,11 @@ export class GameScene extends Phaser.Scene {
   private lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
   private lastHealSkillAt = -HEAL_SKILL_COOLDOWN;
   private lastRapidSkillAt = -RAPID_SKILL_COOLDOWN;
+
+  private skillPoints = 0;
+
+  private unlockedSkills = new Set<number>();
+  private selectedSkillId?: number;
 
   private spaceKey!: Phaser.Input.Keyboard.Key;
   private oneKey!: Phaser.Input.Keyboard.Key;
@@ -77,6 +93,7 @@ export class GameScene extends Phaser.Scene {
   private enemyVisuals: Phaser.GameObjects.GameObject[] = [];
 
   private shopButtons: Phaser.GameObjects.Rectangle[] = [];
+
   private shopCardObjects: Array<{
     object: Phaser.GameObjects.GameObject & { x: number };
     baseX: number;
@@ -108,9 +125,6 @@ export class GameScene extends Phaser.Scene {
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
 
-  // HP低下時の赤いビネット
-  private lowHpOverlay?: Phaser.GameObjects.Graphics;
-
   constructor() {
     super('GameScene');
   }
@@ -122,15 +136,41 @@ export class GameScene extends Phaser.Scene {
       throw new Error('Keyboard input is required.');
     }
 
-    this.spaceKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
-    this.oneKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ONE);
-    this.twoKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TWO);
-    this.threeKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.THREE);
-    this.fourKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FOUR);
-    this.leftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
-    this.rightKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
-    this.eKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
-    this.escKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.spaceKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.SPACE,
+    );
+
+    this.oneKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.ONE,
+    );
+
+    this.twoKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.TWO,
+    );
+
+    this.threeKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.THREE,
+    );
+
+    this.fourKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.FOUR,
+    );
+
+    this.leftKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.LEFT,
+    );
+
+    this.rightKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.RIGHT,
+    );
+
+    this.eKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.E,
+    );
+
+    this.escKey = keyboard.addKey(
+      Phaser.Input.Keyboard.KeyCodes.ESC,
+    );
 
     keyboard.addCapture([
       'SPACE',
@@ -157,7 +197,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.mode === 'gameOver' || this.mode === 'clear') {
+    if (
+      this.mode === 'gameOver' ||
+      this.mode === 'clear'
+    ) {
       if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
         this.resetGame();
         this.showPlaying();
@@ -172,68 +215,86 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.mode === 'playing') {
-      if (this.autoMode) {
-        if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-          this.autoMode = false;
-          this.updateAutoModeText();
-        }
-      } else {
-        if (
-          this.spaceKey.isDown &&
-          this.spaceHoldStartedAt === undefined
-        ) {
-          this.spaceHoldStartedAt = this.time.now;
-        }
-
-        if (
-          this.spaceKey.isDown &&
-          this.spaceHoldStartedAt !== undefined &&
-          this.time.now - this.spaceHoldStartedAt >= AUTO_MODE_HOLD_DURATION
-        ) {
-          this.autoMode = true;
-          this.spaceHoldStartedAt = undefined;
-          this.updateAutoModeText();
-        }
-
-        if (this.spaceKey.isUp) {
-          this.spaceHoldStartedAt = undefined;
-        }
-      }
-
-      if (this.autoMode) {
-        this.attack(AUTO_ATTACK_INTERVAL);
-      }
-
-      if (Phaser.Input.Keyboard.JustDown(this.oneKey)) {
-        this.useRapidSkill();
-      }
-
-      if (Phaser.Input.Keyboard.JustDown(this.twoKey)) {
-        this.useSkill();
-      }
-
-      if (Phaser.Input.Keyboard.JustDown(this.threeKey)) {
-        this.useMoneyPunchSkill();
-      }
-
-      if (Phaser.Input.Keyboard.JustDown(this.fourKey)) {
-        this.useHealSkill();
-      }
-
-      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        this.showShop();
-      }
-
+      this.updatePlayingInput();
       this.updateSkillHud();
-      this.updateLowHpOverlay();
-    } else if (this.mode === 'shop') {
+      return;
+    }
+
+    if (this.mode === 'shop') {
       if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
         this.showPlaying();
-      } else if (Phaser.Input.Keyboard.JustDown(this.leftKey)) {
+      } else if (
+        Phaser.Input.Keyboard.JustDown(this.leftKey)
+      ) {
         this.scrollShop(1);
-      } else if (Phaser.Input.Keyboard.JustDown(this.rightKey)) {
+      } else if (
+        Phaser.Input.Keyboard.JustDown(this.rightKey)
+      ) {
         this.scrollShop(-1);
       }
+
+      return;
+    }
+
+    if (this.mode === 'skillTree') {
+      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+        this.showPlaying();
+      }
+    }
+  }
+
+  private updatePlayingInput(): void {
+    if (this.autoMode) {
+      if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+        this.autoMode = false;
+        this.updateAutoModeText();
+      }
+    } else {
+      if (
+        this.spaceKey.isDown &&
+        this.spaceHoldStartedAt === undefined
+      ) {
+        this.spaceHoldStartedAt = this.time.now;
+      }
+
+      if (
+        this.spaceKey.isDown &&
+        this.spaceHoldStartedAt !== undefined &&
+        this.time.now - this.spaceHoldStartedAt >=
+          AUTO_MODE_HOLD_DURATION
+      ) {
+        this.autoMode = true;
+        this.spaceHoldStartedAt = undefined;
+        this.updateAutoModeText();
+      }
+
+      if (this.spaceKey.isUp) {
+        this.spaceHoldStartedAt = undefined;
+      }
+    }
+
+    if (this.autoMode) {
+      this.attack(this.getAutoAttackInterval());
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.oneKey)) {
+      this.useRapidSkill();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.twoKey)) {
+      this.useSkill();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.threeKey)) {
+      this.useMoneyPunchSkill();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.fourKey)) {
+      this.useHealSkill();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+      this.showSkillTree();
     }
   }
 
@@ -249,6 +310,7 @@ export class GameScene extends Phaser.Scene {
     this.enemyMaxHp = ENEMY_MAX_HP;
     this.enemyHp = this.enemyMaxHp;
     this.enemyVariantIndex = 0;
+    this.enemyIsRare = false;
 
     this.lastSkillAt = -SKILL_COOLDOWN;
     this.lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
@@ -259,19 +321,23 @@ export class GameScene extends Phaser.Scene {
     this.spaceHoldStartedAt = undefined;
 
     this.money = 0;
-
     this.weaponIndex = 0;
-    this.bonusAttackPower = 0;
 
     this.purchasedWeapons.clear();
     this.purchasedEquipments.clear();
 
     this.enemyAlive = true;
+
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
+
+    this.skillPoints = 0;
+    this.unlockedSkills.clear();
+    this.selectedSkillId = undefined;
   }
 
   private showTitle(): void {
     this.mode = 'title';
+
     this.clearScreen();
 
     const panel = this.addScreenObject(
@@ -312,7 +378,7 @@ export class GameScene extends Phaser.Scene {
 
     this.addText(
       GAME_WIDTH / 2,
-      360,
+      350,
       'SPACEキーを1秒長押し：自動モード',
       22,
       '#264653',
@@ -320,18 +386,26 @@ export class GameScene extends Phaser.Scene {
 
     this.addText(
       GAME_WIDTH / 2,
-      405,
-      '1 / 2 / 3：スキル　　E：ショップ',
+      395,
+      '1 / 2 / 3 / 4：スキル',
       22,
       '#264653',
     ).setOrigin(0.5);
 
     this.addText(
       GAME_WIDTH / 2,
-      450,
-      '敵を倒すとお金を獲得、HPが一部回復',
+      440,
+      'E：スキルツリー',
+      22,
+      '#264653',
+    ).setOrigin(0.5);
+
+    this.addText(
+      GAME_WIDTH / 2,
+      485,
+      '金色のレア敵は20%で出現、報酬2倍！',
       20,
-      '#457b9d',
+      '#d4a017',
     ).setOrigin(0.5);
 
     this.addText(
@@ -347,6 +421,7 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'playing';
 
     this.resumeTimers();
+
     this.clearScreen();
 
     this.drawPlayfieldBackground();
@@ -354,16 +429,13 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
 
-    // HP低下時の赤いビネット
-    this.createLowHpOverlay();
-
     const controlsText = this.addText(
       GAME_WIDTH / 2,
       650,
-      'SPACE: 自動モード切替    E: ショップ',
+      'SPACE: 自動モード切替    E: スキルツリー',
       24,
       '#ffffff',
-    ).setOrigin(0.5);
+    );
 
     controlsText.setStroke('#264653', 4);
 
@@ -373,145 +445,324 @@ export class GameScene extends Phaser.Scene {
       '',
       24,
       '#ffffff',
-    ).setOrigin(0.5);
+    );
 
     this.autoModeText.setStroke('#264653', 4);
 
     this.updateAutoModeText();
+
     this.startEnemyAttackTimer();
-    this.updateLowHpOverlay();
   }
 
-  private createLowHpOverlay(): void {
-    this.lowHpOverlay = this.addScreenObject(
-      this.add.graphics(),
+  private showSkillTree(): void {
+    this.mode = 'skillTree';
+
+    this.pauseTimers();
+    this.clearScreen();
+
+    this.addText(
+      GAME_WIDTH / 2,
+      45,
+      'スキルツリー',
+      42,
+      '#f4d35e',
+    ).setOrigin(0.5);
+
+    this.addText(
+      50,
+      85,
+      `スキルポイント：${this.skillPoints}`,
+      24,
+      '#264653',
     );
 
-    this.lowHpOverlay.setDepth(1000);
+    this.addText(
+      GAME_WIDTH / 2,
+      690,
+      '習得可能なスキルをクリックすると選択できます　ESC：戻る',
+      18,
+      '#457b9d',
+    ).setOrigin(0.5);
 
-    this.updateLowHpOverlay();
-  }
+    const positions = [
+      { x: 180, y: 160 },
+      { x: 1100, y: 160 },
+      { x: 180, y: 300 },
+      { x: 1100, y: 300 },
+      { x: 350, y: 300 },
+      { x: 930, y: 300 },
+      { x: 350, y: 470 },
+      { x: 930, y: 470 },
+      { x: 520, y: 590 },
+      { x: 760, y: 590 },
+    ];
 
-  /**
-   * HPが減ったときに画面端だけを赤くする。
-   *
-   * 40%以上 : 消灯
-   * 30〜40% : 薄い赤
-   * 20〜30% : 中程度の赤
-   * 20%以下 : 強い赤
-   *
-   * 中央には赤を重ねない。
-   */
-  private updateLowHpOverlay(): void {
-    if (!this.lowHpOverlay || this.mode !== 'playing') {
-      return;
+    for (const skill of SKILL_TREE) {
+      for (const parentId of skill.parentIds) {
+        const parent = SKILL_TREE.find(
+          (item) => item.id === parentId,
+        );
+
+        if (!parent) {
+          continue;
+        }
+
+        const parentPosition = positions[parent.id];
+        const position = positions[skill.id];
+
+        const line = this.addScreenObject(
+          this.add.graphics(),
+        );
+
+        line.lineStyle(5, 0xd9e2ec, 1);
+        line.beginPath();
+        line.moveTo(
+          parentPosition.x,
+          parentPosition.y,
+        );
+        line.lineTo(
+          position.x,
+          position.y,
+        );
+        line.strokePath();
+      }
     }
 
-    const hpRatio = Phaser.Math.Clamp(
-      this.playerHp / this.playerMaxHp,
-      0,
+    for (const skill of SKILL_TREE) {
+      this.drawSkillTreeNode(
+        skill,
+        positions[skill.id].x,
+        positions[skill.id].y,
+      );
+    }
+  }
+
+  private drawSkillTreeNode(
+    skill: SkillTreeSkill,
+    x: number,
+    y: number,
+  ): void {
+    const unlocked = this.isSkillUnlocked(skill);
+    const selected = this.selectedSkillId === skill.id;
+
+    let color = 0x53616f;
+
+    if (unlocked) {
+      color = 0x2a9d8f;
+    }
+
+    if (selected) {
+      color = 0xf4d35e;
+    }
+
+    const node = this.addScreenObject(
+      this.add.rectangle(
+        x,
+        y,
+        150,
+        90,
+        color,
+      ),
+    );
+
+    node.setStrokeStyle(
+      selected ? 6 : 3,
+      selected ? 0xffc300 : 0xffffff,
       1,
     );
 
-    this.lowHpOverlay.clear();
+    node.setInteractive({
+      useHandCursor: true,
+    });
 
-    if (hpRatio > 0.4) {
+    node.on('pointerdown', () => {
+      this.selectSkill(skill.id);
+    });
+
+    this.addText(
+      x,
+      y - 20,
+      skill.name,
+      20,
+      '#ffffff',
+    ).setOrigin(0.5);
+
+    this.addText(
+      x,
+      y + 8,
+      skill.description,
+      13,
+      '#ffffff',
+    ).setOrigin(0.5);
+
+    this.addText(
+      x,
+      y + 30,
+      unlocked ? '選択可能' : `Lv.${skill.levelRequired}～`,
+      12,
+      '#ffffff',
+    ).setOrigin(0.5);
+  }
+
+  private isSkillUnlocked(skill: SkillTreeSkill): boolean {
+    if (this.level < skill.levelRequired) {
+      return false;
+    }
+
+    if (skill.parentIds.length === 0) {
+      return true;
+    }
+
+    return skill.parentIds.some((parentId) =>
+      this.unlockedSkills.has(parentId),
+    );
+  }
+
+  private selectSkill(skillId: number): void {
+    const skill = SKILL_TREE.find(
+      (item) => item.id === skillId,
+    );
+
+    if (!skill) {
       return;
     }
 
-    let alpha = 0;
-    let border = 0;
-
-    if (hpRatio <= 0.2) {
-      alpha = 0.42;
-      border = 145;
-    } else if (hpRatio <= 0.3) {
-      alpha = 0.28;
-      border = 110;
-    } else {
-      alpha = 0.16;
-      border = 75;
+    if (!this.isSkillUnlocked(skill)) {
+      return;
     }
 
-    const width = GAME_WIDTH;
-    const height = 720;
+    if (!this.unlockedSkills.has(skillId)) {
+      if (this.skillPoints <= 0) {
+        return;
+      }
 
-    this.lowHpOverlay.fillStyle(0xd90429, alpha);
+      this.skillPoints -= 1;
+      this.unlockedSkills.add(skillId);
+    }
 
-    // 上
-    this.lowHpOverlay.fillRect(
-      0,
-      0,
-      width,
-      border,
+    this.selectedSkillId = skillId;
+
+    this.applySelectedSkillEffects();
+
+    this.showSkillTree();
+  }
+
+  private applySelectedSkillEffects(): void {
+    this.playerMaxHp = PLAYER_MAX_HP;
+
+    for (const equipmentIndex of this.purchasedEquipments) {
+      const equipment = EQUIPMENTS[equipmentIndex];
+
+      if (equipment) {
+        this.playerMaxHp += equipment.hpBonus;
+      }
+    }
+
+    if (this.unlockedSkills.has(1)) {
+      this.playerMaxHp += 50;
+    }
+
+    if (this.unlockedSkills.has(7)) {
+      this.playerMaxHp += 100;
+    }
+
+    this.playerHp = Math.min(
+      this.playerHp,
+      this.playerMaxHp,
     );
+  }
 
-    // 下
-    this.lowHpOverlay.fillRect(
-      0,
-      height - border,
-      width,
-      border,
-    );
+  private getAttackPower(): number {
+    let power = WEAPONS[this.weaponIndex].attackPower;
 
-    // 左
-    this.lowHpOverlay.fillRect(
-      0,
-      border,
-      border,
-      height - border * 2,
-    );
+    if (this.unlockedSkills.has(0)) {
+      power += 10;
+    }
 
-    // 右
-    this.lowHpOverlay.fillRect(
-      width - border,
-      border,
-      border,
-      height - border * 2,
-    );
+    return power;
+  }
 
-    // 角を少し強調してビネット感を出す
-    this.lowHpOverlay.fillStyle(
-      0x9d0208,
-      alpha * 0.65,
-    );
+  private getPlayerAttackInterval(): number {
+    let interval = PLAYER_ATTACK_INTERVAL;
 
-    this.lowHpOverlay.fillRect(
-      0,
-      0,
-      border,
-      border,
-    );
+    if (this.unlockedSkills.has(2)) {
+      interval -= 30;
+    }
 
-    this.lowHpOverlay.fillRect(
-      width - border,
-      0,
-      border,
-      border,
-    );
+    return Math.max(50, interval);
+  }
 
-    this.lowHpOverlay.fillRect(
-      0,
-      height - border,
-      border,
-      border,
-    );
+  private getAutoAttackInterval(): number {
+    let interval = AUTO_ATTACK_INTERVAL;
 
-    this.lowHpOverlay.fillRect(
-      width - border,
-      height - border,
-      border,
-      border,
-    );
+    if (this.unlockedSkills.has(2)) {
+      interval -= 100;
+    }
+
+    return Math.max(100, interval);
+  }
+
+  private getEnemyDamage(): number {
+    let damage = this.getEnemyAttackPower();
+
+    if (this.unlockedSkills.has(3)) {
+      damage -= 1;
+    }
+
+    return Math.max(1, damage);
+  }
+
+  private getDefeatHeal(): number {
+    let heal = ENEMY_DEFEAT_HEAL;
+
+    if (this.unlockedSkills.has(5)) {
+      heal += 15;
+    }
+
+    return heal;
+  }
+
+  private getSkillMultiplier(): number {
+    let multiplier = SKILL_DAMAGE_MULTIPLIER;
+
+    if (this.unlockedSkills.has(4)) {
+      multiplier *= 1.25;
+    }
+
+    return multiplier;
+  }
+
+  private getMoneyPunchMultiplier(): number {
+    let multiplier = 7;
+
+    if (this.unlockedSkills.has(8)) {
+      multiplier *= 1.5;
+    }
+
+    return multiplier;
+  }
+
+  private getEnemyRewardMultiplier(): number {
+    let multiplier = this.enemyIsRare
+      ? RARE_ENEMY_REWARD_MULTIPLIER
+      : 1;
+
+    if (this.unlockedSkills.has(9)) {
+      multiplier *= 1.2;
+    }
+
+    return multiplier;
   }
 
   private showShop(
     category: ShopCategory = this.shopCategory,
   ): void {
     this.mode = 'shop';
+
     this.shopCategory = category;
 
     this.pauseTimers();
+
     this.clearScreen();
 
     this.shopScrollOffset = 0;
@@ -532,13 +783,19 @@ export class GameScene extends Phaser.Scene {
         135,
         260,
         48,
-        category === 'weapon' ? 0x2a9d8f : 0x53616f,
+        category === 'weapon'
+          ? 0x2a9d8f
+          : 0x53616f,
       ),
     );
 
-    weaponTab.setInteractive({ useHandCursor: true });
-    weaponTab.on('pointerdown', () =>
-      this.showShop('weapon'),
+    weaponTab.setInteractive({
+      useHandCursor: true,
+    });
+
+    weaponTab.on(
+      'pointerdown',
+      () => this.showShop('weapon'),
     );
 
     this.addText(
@@ -555,13 +812,19 @@ export class GameScene extends Phaser.Scene {
         135,
         260,
         48,
-        category === 'equipment' ? 0x2a9d8f : 0x53616f,
+        category === 'equipment'
+          ? 0x2a9d8f
+          : 0x53616f,
       ),
     );
 
-    equipmentTab.setInteractive({ useHandCursor: true });
-    equipmentTab.on('pointerdown', () =>
-      this.showShop('equipment'),
+    equipmentTab.setInteractive({
+      useHandCursor: true,
+    });
+
+    equipmentTab.on(
+      'pointerdown',
+      () => this.showShop('equipment'),
     );
 
     this.addText(
@@ -607,7 +870,12 @@ export class GameScene extends Phaser.Scene {
         ),
       );
 
-      card.setStrokeStyle(3, 0xd9e2ec, 1);
+      card.setStrokeStyle(
+        3,
+        0xd9e2ec,
+        1,
+      );
+
       this.registerShopObject(card, x);
 
       const icon = this.drawShopIcon(
@@ -658,7 +926,9 @@ export class GameScene extends Phaser.Scene {
 
       this.registerShopObject(button, x);
 
-      button.setInteractive({ useHandCursor: true });
+      button.setInteractive({
+        useHandCursor: true,
+      });
 
       const label = this.addText(
         x,
@@ -671,18 +941,27 @@ export class GameScene extends Phaser.Scene {
       this.registerShopObject(label, x);
 
       const weaponIndex =
-        item.kind === 'weapon' ? index + 1 : -1;
+        item.kind === 'weapon'
+          ? index + 1
+          : -1;
 
       const equipmentIndex =
-        item.kind === 'equipment' ? index : -1;
+        item.kind === 'equipment'
+          ? index
+          : -1;
 
       const purchased =
         item.kind === 'weapon'
-          ? this.purchasedWeapons.has(weaponIndex)
+          ? this.purchasedWeapons.has(
+              weaponIndex,
+            )
           : item.kind === 'equipment' &&
-            this.purchasedEquipments.has(equipmentIndex);
+            this.purchasedEquipments.has(
+              equipmentIndex,
+            );
 
-      const canBuy = this.money >= item.price;
+      const canBuy =
+        this.money >= item.price;
 
       const isEquipped =
         item.kind === 'weapon' &&
@@ -703,19 +982,32 @@ export class GameScene extends Phaser.Scene {
 
       if (purchased) {
         button.setFillStyle(
-          isEquipped ? 0x53616f : 0x457b9d,
+          isEquipped
+            ? 0x53616f
+            : 0x457b9d,
         );
 
-        if (item.kind === 'weapon' && !isEquipped) {
-          button.on('pointerdown', () =>
-            this.equipWeapon(weaponIndex),
+        if (
+          item.kind === 'weapon' &&
+          !isEquipped
+        ) {
+          button.on(
+            'pointerdown',
+            () => this.equipWeapon(
+              weaponIndex,
+            ),
           );
         }
       } else if (!canBuy) {
         button.setFillStyle(0x53616f);
       } else {
-        button.on('pointerdown', () =>
-          this.requestPurchase(index, item.kind),
+        button.on(
+          'pointerdown',
+          () =>
+            this.requestPurchase(
+              index,
+              item.kind,
+            ),
         );
       }
 
@@ -732,9 +1024,13 @@ export class GameScene extends Phaser.Scene {
       ),
     );
 
-    leftButton.setInteractive({ useHandCursor: true });
-    leftButton.on('pointerdown', () =>
-      this.scrollShop(1),
+    leftButton.setInteractive({
+      useHandCursor: true,
+    });
+
+    leftButton.on(
+      'pointerdown',
+      () => this.scrollShop(1),
     );
 
     this.addText(
@@ -755,9 +1051,13 @@ export class GameScene extends Phaser.Scene {
       ),
     );
 
-    rightButton.setInteractive({ useHandCursor: true });
-    rightButton.on('pointerdown', () =>
-      this.scrollShop(-1),
+    rightButton.setInteractive({
+      useHandCursor: true,
+    });
+
+    rightButton.on(
+      'pointerdown',
+      () => this.scrollShop(-1),
     );
 
     this.addText(
@@ -786,9 +1086,13 @@ export class GameScene extends Phaser.Scene {
       ),
     );
 
-    backButton.setInteractive({ useHandCursor: true });
-    backButton.on('pointerdown', () =>
-      this.showPlaying(),
+    backButton.setInteractive({
+      useHandCursor: true,
+    });
+
+    backButton.on(
+      'pointerdown',
+      () => this.showPlaying(),
     );
 
     this.addText(
@@ -807,57 +1111,87 @@ export class GameScene extends Phaser.Scene {
         this.shopItemCount - 4,
       ) * 290;
 
-    this.shopScrollOffset = Phaser.Math.Clamp(
-      this.shopScrollOffset + direction * 290,
-      maxOffset,
-      0,
-    );
+    this.shopScrollOffset =
+      Phaser.Math.Clamp(
+        this.shopScrollOffset +
+          direction * 290,
+        maxOffset,
+        0,
+      );
 
-    for (const cardObject of this.shopCardObjects) {
+    for (
+      const cardObject of this.shopCardObjects
+    ) {
       cardObject.object.x =
-        cardObject.baseX + this.shopScrollOffset;
+        cardObject.baseX +
+        this.shopScrollOffset;
     }
   }
 
   private purchase(
     itemIndex: number,
-    itemKind: 'weapon' | 'equipment' | 'ticket',
+    itemKind:
+      | 'weapon'
+      | 'equipment'
+      | 'ticket',
   ): void {
     if (itemKind === 'weapon') {
-      const weaponIndex = itemIndex + 1;
-      const weapon = WEAPONS[weaponIndex];
+      const weaponIndex =
+        itemIndex + 1;
+
+      const weapon =
+        WEAPONS[weaponIndex];
 
       if (
-        this.purchasedWeapons.has(weaponIndex) ||
+        this.purchasedWeapons.has(
+          weaponIndex,
+        ) ||
         this.money < weapon.price
       ) {
         return;
       }
 
       this.money -= weapon.price;
-      this.weaponIndex = weaponIndex;
-      this.purchasedWeapons.add(weaponIndex);
+
+      this.weaponIndex =
+        weaponIndex;
+
+      this.purchasedWeapons.add(
+        weaponIndex,
+      );
 
       this.showPlaying();
+
       return;
     }
 
     if (itemKind === 'equipment') {
-      const equipmentIndex = itemIndex;
-      const equipment = EQUIPMENTS[equipmentIndex];
+      const equipmentIndex =
+        itemIndex;
+
+      const equipment =
+        EQUIPMENTS[equipmentIndex];
 
       if (
-        this.purchasedEquipments.has(equipmentIndex) ||
+        this.purchasedEquipments.has(
+          equipmentIndex,
+        ) ||
         this.money < equipment.price
       ) {
         return;
       }
 
       this.money -= equipment.price;
-      this.purchasedEquipments.add(equipmentIndex);
 
-      this.playerMaxHp += equipment.hpBonus;
-      this.playerHp += equipment.hpBonus;
+      this.purchasedEquipments.add(
+        equipmentIndex,
+      );
+
+      this.playerMaxHp +=
+        equipment.hpBonus;
+
+      this.playerHp +=
+        equipment.hpBonus;
 
       this.showPlaying();
 
@@ -870,17 +1204,27 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.money >= CLEAR_TICKET_PRICE) {
-      this.money -= CLEAR_TICKET_PRICE;
+    if (
+      this.money >=
+      CLEAR_TICKET_PRICE
+    ) {
+      this.money -=
+        CLEAR_TICKET_PRICE;
+
       this.showClear();
     }
   }
 
   private requestPurchase(
     itemIndex: number,
-    itemKind: 'weapon' | 'equipment' | 'ticket',
+    itemKind:
+      | 'weapon'
+      | 'equipment'
+      | 'ticket',
   ): void {
-    if (this.confirmationObjects.length > 0) {
+    if (
+      this.confirmationObjects.length > 0
+    ) {
       return;
     }
 
@@ -889,7 +1233,9 @@ export class GameScene extends Phaser.Scene {
       itemKind,
     };
 
-    for (const button of this.shopButtons) {
+    for (
+      const button of this.shopButtons
+    ) {
       if (button.input) {
         button.input.enabled = false;
       }
@@ -923,9 +1269,13 @@ export class GameScene extends Phaser.Scene {
       ),
     );
 
-    yes.setInteractive({ useHandCursor: true });
-    yes.on('pointerdown', () =>
-      this.confirmPurchase(),
+    yes.setInteractive({
+      useHandCursor: true,
+    });
+
+    yes.on(
+      'pointerdown',
+      () => this.confirmPurchase(),
     );
 
     const no = this.addScreenObject(
@@ -938,9 +1288,13 @@ export class GameScene extends Phaser.Scene {
       ),
     );
 
-    no.setInteractive({ useHandCursor: true });
-    no.on('pointerdown', () =>
-      this.cancelPurchase(),
+    no.setInteractive({
+      useHandCursor: true,
+    });
+
+    no.on(
+      'pointerdown',
+      () => this.cancelPurchase(),
     );
 
     const yesText = this.addText(
@@ -970,7 +1324,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private confirmPurchase(): void {
-    const purchase = this.pendingPurchase;
+    const purchase =
+      this.pendingPurchase;
 
     this.cancelPurchase();
 
@@ -983,50 +1338,74 @@ export class GameScene extends Phaser.Scene {
   }
 
   private cancelPurchase(): void {
-    for (const object of this.confirmationObjects) {
+    for (
+      const object of this.confirmationObjects
+    ) {
       object.destroy();
 
       const index =
-        this.screenObjects.indexOf(object);
+        this.screenObjects.indexOf(
+          object,
+        );
 
       if (index >= 0) {
-        this.screenObjects.splice(index, 1);
+        this.screenObjects.splice(
+          index,
+          1,
+        );
       }
     }
 
     this.confirmationObjects = [];
-    this.pendingPurchase = undefined;
 
-    for (const button of this.shopButtons) {
+    this.pendingPurchase =
+      undefined;
+
+    for (
+      const button of this.shopButtons
+    ) {
       if (button.input) {
         button.input.enabled = true;
       }
     }
   }
 
-  private equipWeapon(weaponIndex: number): void {
-    if (!this.purchasedWeapons.has(weaponIndex)) {
-      return;
-    }
-
-    this.weaponIndex = weaponIndex;
-    this.showPlaying();
-  }
-
-  private attack(interval: number): void {
+  private equipWeapon(
+    weaponIndex: number,
+  ): void {
     if (
-      !this.enemyAlive ||
-      this.time.now - this.lastAttackAt < interval
+      !this.purchasedWeapons.has(
+        weaponIndex,
+      )
     ) {
       return;
     }
 
-    this.lastAttackAt = this.time.now;
+    this.weaponIndex =
+      weaponIndex;
+
+    this.showPlaying();
+  }
+
+  private attack(
+    interval: number,
+  ): void {
+    if (
+      !this.enemyAlive ||
+      this.time.now -
+        this.lastAttackAt <
+        interval
+    ) {
+      return;
+    }
+
+    this.lastAttackAt =
+      this.time.now;
 
     this.playAttackEffect();
 
     this.applyDamage(
-      this.getPlayerAttackPower(),
+      this.getAttackPower(),
       '#f4d35e',
     );
   }
@@ -1035,18 +1414,21 @@ export class GameScene extends Phaser.Scene {
     if (
       !this.enemyAlive ||
       this.level < 2 ||
-      this.time.now - this.lastSkillAt < SKILL_COOLDOWN
+      this.time.now -
+        this.lastSkillAt <
+        SKILL_COOLDOWN
     ) {
       return;
     }
 
-    this.lastSkillAt = this.time.now;
+    this.lastSkillAt =
+      this.time.now;
 
     this.playGoldStrikeEffect();
 
     this.applyDamage(
-      this.getPlayerAttackPower() *
-        SKILL_DAMAGE_MULTIPLIER,
+      this.getAttackPower() *
+        this.getSkillMultiplier(),
       '#f4d35e',
     );
   }
@@ -1055,75 +1437,93 @@ export class GameScene extends Phaser.Scene {
     if (
       !this.enemyAlive ||
       this.level < 3 ||
-      this.time.now - this.lastMoneyPunchAt <
+      this.time.now -
+        this.lastMoneyPunchAt <
         MONEY_PUNCH_COOLDOWN
     ) {
       return;
     }
 
-    this.lastMoneyPunchAt = this.time.now;
+    this.lastMoneyPunchAt =
+      this.time.now;
 
     this.playMoneyPunchEffect();
 
-    this.time.delayedCall(350, () => {
-      if (
-        this.mode === 'playing' &&
-        this.enemyAlive
-      ) {
-        this.applyDamage(
-          this.getPlayerAttackPower() * 7,
-          '#57cc99',
-        );
-      }
-    });
+    this.time.delayedCall(
+      350,
+      () => {
+        if (
+          this.mode === 'playing' &&
+          this.enemyAlive
+        ) {
+          this.applyDamage(
+            this.getAttackPower() *
+              this.getMoneyPunchMultiplier(),
+            '#57cc99',
+          );
+        }
+      },
+    );
   }
 
   private useHealSkill(): void {
     if (
       this.level < 2 ||
-      this.time.now - this.lastHealSkillAt <
+      this.time.now -
+        this.lastHealSkillAt <
         HEAL_SKILL_COOLDOWN
     ) {
       return;
     }
 
     const recovery =
-      this.playerMaxHp - this.playerHp;
+      this.playerMaxHp -
+      this.playerHp;
 
     if (recovery <= 0) {
       return;
     }
 
-    this.lastHealSkillAt = this.time.now;
-    this.playerHp = this.playerMaxHp;
+    this.lastHealSkillAt =
+      this.time.now;
 
-    this.playHealEffect(recovery);
+    this.playerHp =
+      this.playerMaxHp;
+
+    this.playHealEffect(
+      recovery,
+    );
+
     this.updateHud();
   }
 
   private useRapidSkill(): void {
     if (
       !this.enemyAlive ||
-      this.time.now - this.lastRapidSkillAt <
+      this.time.now -
+        this.lastRapidSkillAt <
         RAPID_SKILL_COOLDOWN
     ) {
       return;
     }
 
-    this.lastRapidSkillAt = this.time.now;
+    this.lastRapidSkillAt =
+      this.time.now;
 
     this.playRapidEffect();
 
-    this.applyDamage(
-      this.getPlayerAttackPower() * 5,
-      '#ffadad',
-    );
-  }
+    let damage =
+      this.getAttackPower() * 5;
 
-  private getPlayerAttackPower(): number {
-    return (
-      WEAPONS[this.weaponIndex].attackPower +
-      this.bonusAttackPower
+    if (
+      this.unlockedSkills.has(6)
+    ) {
+      damage *= 1.3;
+    }
+
+    this.applyDamage(
+      damage,
+      '#ffadad',
     );
   }
 
@@ -1169,13 +1569,19 @@ export class GameScene extends Phaser.Scene {
     const damageText =
       this.addScreenObject(
         this.add
-          .text(x, 330, message, {
-            fontFamily: 'sans-serif',
-            fontSize: '38px',
-            color,
-            stroke: '#264653',
-            strokeThickness: 5,
-          })
+          .text(
+            x,
+            330,
+            message,
+            {
+              fontFamily:
+                'sans-serif',
+              fontSize: '38px',
+              color,
+              stroke: '#264653',
+              strokeThickness: 5,
+            },
+          )
           .setOrigin(0.5),
       );
 
@@ -1186,7 +1592,9 @@ export class GameScene extends Phaser.Scene {
       duration: 650,
       ease: 'Cubic.easeOut',
       onComplete: () =>
-        this.removeScreenObject(damageText),
+        this.removeScreenObject(
+          damageText,
+        ),
     });
   }
 
@@ -1195,10 +1603,12 @@ export class GameScene extends Phaser.Scene {
 
     this.playerHp = Math.min(
       this.playerMaxHp,
-      this.playerHp + ENEMY_DEFEAT_HEAL,
+      this.playerHp +
+        this.getDefeatHeal(),
     );
 
-    const reward = this.getEnemyReward();
+    const reward =
+      this.getEnemyReward();
 
     this.money += reward;
 
@@ -1208,31 +1618,35 @@ export class GameScene extends Phaser.Scene {
       640,
     );
 
-    this.defeatedCount += 1;
-
-    if (
-      this.defeatedCount % KILLS_PER_LEVEL === 0 &&
-      this.level < 3
-    ) {
-      this.level += 1;
-
-      // レベルアップボーナス
-      this.money += 100;
-      this.bonusAttackPower += 20;
-      this.playerMaxHp += 20;
-      this.playerHp += 20;
-
-      this.showLevelUpEffect();
+    if (this.enemyIsRare) {
       this.showFloatingText(
-        'LEVEL UP!  所持金 +100 / 攻撃力 +20 / 最大HP +20',
+        '★ RARE ×2 ★',
         '#f4d35e',
         640,
       );
     }
 
-    this.enemyMaxHp += ENEMY_HP_INCREASE;
+    this.defeatedCount += 1;
+
+    if (
+      this.defeatedCount %
+        KILLS_PER_LEVEL ===
+        0 &&
+      this.level < 3
+    ) {
+      this.level += 1;
+
+      // レベルアップ時にスキルポイント+1
+      this.skillPoints += 1;
+
+      this.showLevelUpEffect();
+    }
+
+    this.enemyMaxHp +=
+      ENEMY_HP_INCREASE;
 
     this.updateHud();
+
     this.playDefeatEffect();
 
     this.respawnTimer =
@@ -1242,15 +1656,22 @@ export class GameScene extends Phaser.Scene {
           ENEMY_RESPAWN_MAX,
         ),
         () => {
-          if (this.mode !== 'playing') {
+          if (
+            this.mode !==
+            'playing'
+          ) {
             return;
           }
 
-          this.enemyHp = this.enemyMaxHp;
+          this.enemyHp =
+            this.enemyMaxHp;
+
           this.enemyAlive = true;
 
           this.chooseNextEnemyVariant();
+
           this.drawCombatants();
+
           this.updateHud();
 
           this.startEnemyAttackTimer();
@@ -1262,7 +1683,9 @@ export class GameScene extends Phaser.Scene {
     this.stopEnemyAttackTimer();
 
     const variant =
-      ENEMY_VARIANTS[this.enemyVariantIndex];
+      ENEMY_VARIANTS[
+        this.enemyVariantIndex
+      ];
 
     const interval =
       variant.attackInterval ??
@@ -1272,7 +1695,8 @@ export class GameScene extends Phaser.Scene {
       this.time.addEvent({
         delay: interval,
         loop: true,
-        callback: () => this.enemyAttack(),
+        callback: () =>
+          this.enemyAttack(),
       });
   }
 
@@ -1287,7 +1711,7 @@ export class GameScene extends Phaser.Scene {
     this.playerHp = Math.max(
       0,
       this.playerHp -
-        this.getEnemyAttackPower(),
+        this.getEnemyDamage(),
     );
 
     this.cameras.main.flash(
@@ -1298,7 +1722,8 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.tweens.add({
-      targets: this.enemyVisuals,
+      targets:
+        this.enemyVisuals,
       x: '+=14',
       duration: 70,
       yoyo: true,
@@ -1316,6 +1741,7 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'gameOver';
 
     this.stopTimers();
+
     this.clearScreen();
 
     this.addText(
@@ -1347,6 +1773,7 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'clear';
 
     this.stopTimers();
+
     this.clearScreen();
 
     this.addText(
@@ -1451,15 +1878,16 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-    this.hudText = this.addText(
-      36,
-      showHpBars ? 105 : 24,
-      '',
-      22,
-      showHpBars
-        ? '#ffffff'
-        : '#264653',
-    );
+    this.hudText =
+      this.addText(
+        36,
+        showHpBars ? 105 : 24,
+        '',
+        22,
+        showHpBars
+          ? '#ffffff'
+          : '#264653',
+      );
 
     this.hudText.setStroke(
       showHpBars
@@ -1594,7 +2022,8 @@ export class GameScene extends Phaser.Scene {
     this.hudText?.setText([
       `レベル: ${this.level}  撃破数: ${this.defeatedCount}`,
       `所持金: ${this.money}円`,
-      `装備中: ${WEAPONS[this.weaponIndex].name} (攻撃力 ${this.getPlayerAttackPower()})`,
+      `装備中: ${WEAPONS[this.weaponIndex].name} (攻撃力 ${this.getAttackPower()})`,
+      `スキルP: ${this.skillPoints}`,
     ]);
 
     this.progressText?.setText(
@@ -1638,7 +2067,6 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.updateSkillHud();
-    this.updateLowHpOverlay();
   }
 
   private getEnemyAttackPower(): number {
@@ -1660,7 +2088,10 @@ export class GameScene extends Phaser.Scene {
         this.enemyVariantIndex
       ];
 
-    return variant.reward;
+    return Math.floor(
+      variant.reward *
+        this.getEnemyRewardMultiplier(),
+    );
   }
 
   private updateSkillHud(): void {
@@ -1672,12 +2103,14 @@ export class GameScene extends Phaser.Scene {
       {
         x: 150,
         y: 270,
-        action: () => this.useRapidSkill(),
+        action: () =>
+          this.useRapidSkill(),
       },
       {
         x: 150,
         y: 400,
-        action: () => this.useSkill(),
+        action: () =>
+          this.useSkill(),
       },
       {
         x: 150,
@@ -1688,11 +2121,14 @@ export class GameScene extends Phaser.Scene {
       {
         x: 1130,
         y: 400,
-        action: () => this.useHealSkill(),
+        action: () =>
+          this.useHealSkill(),
       },
     ];
 
-    for (const skill of skills) {
+    for (
+      const skill of skills
+    ) {
       const button =
         this.addScreenObject(
           this.add.circle(
@@ -1712,13 +2148,16 @@ export class GameScene extends Phaser.Scene {
         skill.action,
       );
 
-      this.skillButtons.push(button);
+      this.skillButtons.push(
+        button,
+      );
 
       const icon =
         this.drawSkillIcon(
           skill.x,
           skill.y,
-          this.skillButtons.length - 1,
+          this.skillButtons
+            .length - 1,
         );
 
       icon.setScale(1.2);
@@ -1778,9 +2217,32 @@ export class GameScene extends Phaser.Scene {
         ) === 0,
     ];
 
+    const cooldowns = [
+      this.getSkillRemaining(
+        this.lastRapidSkillAt,
+        RAPID_SKILL_COOLDOWN,
+      ) / RAPID_SKILL_COOLDOWN,
+
+      this.getSkillRemaining(
+        this.lastSkillAt,
+        SKILL_COOLDOWN,
+      ) / SKILL_COOLDOWN,
+
+      this.getSkillRemaining(
+        this.lastMoneyPunchAt,
+        MONEY_PUNCH_COOLDOWN,
+      ) / MONEY_PUNCH_COOLDOWN,
+
+      this.getSkillRemaining(
+        this.lastHealSkillAt,
+        HEAL_SKILL_COOLDOWN,
+      ) / HEAL_SKILL_COOLDOWN,
+    ];
+
     for (
       let index = 0;
-      index < this.skillButtons.length;
+      index <
+      this.skillButtons.length;
       index += 1
     ) {
       this.skillButtons[
@@ -1799,34 +2261,16 @@ export class GameScene extends Phaser.Scene {
           : 0.45,
       );
 
-      const cooldowns = [
-        this.getSkillRemaining(
-          this.lastRapidSkillAt,
-          RAPID_SKILL_COOLDOWN,
-        ) / RAPID_SKILL_COOLDOWN,
-
-        this.getSkillRemaining(
-          this.lastSkillAt,
-          SKILL_COOLDOWN,
-        ) / SKILL_COOLDOWN,
-
-        this.getSkillRemaining(
-          this.lastMoneyPunchAt,
-          MONEY_PUNCH_COOLDOWN,
-        ) / MONEY_PUNCH_COOLDOWN,
-
-        this.getSkillRemaining(
-          this.lastHealSkillAt,
-          HEAL_SKILL_COOLDOWN,
-        ) / HEAL_SKILL_COOLDOWN,
-      ];
-
       const ring =
-        this.skillCooldownRings[index];
+        this.skillCooldownRings[
+          index
+        ];
 
       ring.clear();
 
-      if (cooldowns[index] > 0) {
+      if (
+        cooldowns[index] > 0
+      ) {
         ring.lineStyle(
           7,
           0x264653,
@@ -2069,7 +2513,9 @@ export class GameScene extends Phaser.Scene {
   private updateAutoModeText(): void {
     this.autoModeText?.setText(
       `自動モード：${
-        this.autoMode ? 'ON' : 'OFF'
+        this.autoMode
+          ? 'ON'
+          : 'OFF'
       }`,
     );
   }
@@ -2152,7 +2598,9 @@ export class GameScene extends Phaser.Scene {
       duration: 180,
       ease: 'Cubic.easeOut',
       onComplete: () =>
-        this.removeScreenObject(slash),
+        this.removeScreenObject(
+          slash,
+        ),
     });
   }
 
@@ -2231,9 +2679,10 @@ export class GameScene extends Phaser.Scene {
       angle: 720,
       duration: 450,
       ease: 'Cubic.easeIn',
-
       onComplete: () => {
-        this.removeScreenObject(axe);
+        this.removeScreenObject(
+          axe,
+        );
 
         const impact =
           this.addScreenObject(
@@ -2449,6 +2898,12 @@ export class GameScene extends Phaser.Scene {
           levelLabel,
         ),
     });
+
+    this.showFloatingText(
+      'スキルポイント +1',
+      '#57cc99',
+      640,
+    );
   }
 
   private playDefeatEffect(): void {
@@ -2470,7 +2925,8 @@ export class GameScene extends Phaser.Scene {
       );
 
     this.tweens.add({
-      targets: this.enemyVisuals,
+      targets:
+        this.enemyVisuals,
       scaleX: 1.35,
       scaleY: 1.35,
       alpha: 0,
@@ -2489,7 +2945,10 @@ export class GameScene extends Phaser.Scene {
           defeatText,
         );
 
-        if (this.mode === 'playing') {
+        if (
+          this.mode ===
+          'playing'
+        ) {
           this.drawCombatants();
         }
       },
@@ -2512,7 +2971,9 @@ export class GameScene extends Phaser.Scene {
 
     icon.setPosition(x, y);
 
-    if (itemKind === 'ticket') {
+    if (
+      itemKind === 'ticket'
+    ) {
       icon.fillStyle(
         0xf4d35e,
         1,
@@ -2554,7 +3015,9 @@ export class GameScene extends Phaser.Scene {
       return icon;
     }
 
-    if (itemKind === 'equipment') {
+    if (
+      itemKind === 'equipment'
+    ) {
       icon.fillStyle(
         0x457b9d,
         1,
@@ -2655,7 +3118,20 @@ export class GameScene extends Phaser.Scene {
           this.enemyVariantIndex
         ];
 
-      if (variant.shape === 'slime') {
+      const bodyColor =
+        this.enemyIsRare
+          ? RARE_ENEMY_COLOR
+          : variant.bodyColor;
+
+      const headColor =
+        this.enemyIsRare
+          ? RARE_ENEMY_HEAD_COLOR
+          : variant.headColor;
+
+      if (
+        variant.shape ===
+        'slime'
+      ) {
         this.enemyVisuals.push(
           this.addEnemyVisual(
             this.add.ellipse(
@@ -2663,7 +3139,7 @@ export class GameScene extends Phaser.Scene {
               390,
               220,
               190,
-              variant.bodyColor,
+              bodyColor,
             ),
           ),
         );
@@ -2674,7 +3150,7 @@ export class GameScene extends Phaser.Scene {
               610,
               370,
               14,
-              variant.headColor,
+              headColor,
             ),
           ),
         );
@@ -2685,12 +3161,13 @@ export class GameScene extends Phaser.Scene {
               670,
               370,
               14,
-              variant.headColor,
+              headColor,
             ),
           ),
         );
       } else if (
-        variant.shape === 'golem'
+        variant.shape ===
+        'golem'
       ) {
         this.enemyVisuals.push(
           this.addEnemyVisual(
@@ -2699,7 +3176,7 @@ export class GameScene extends Phaser.Scene {
               410,
               220,
               210,
-              variant.bodyColor,
+              bodyColor,
             ),
           ),
         );
@@ -2711,7 +3188,7 @@ export class GameScene extends Phaser.Scene {
               270,
               180,
               100,
-              variant.headColor,
+              headColor,
             ),
           ),
         );
@@ -2745,7 +3222,7 @@ export class GameScene extends Phaser.Scene {
               400,
               170,
               180,
-              variant.bodyColor,
+              bodyColor,
             ),
           ),
         );
@@ -2756,7 +3233,7 @@ export class GameScene extends Phaser.Scene {
               640,
               280,
               55,
-              variant.headColor,
+              headColor,
             ),
           ),
         );
@@ -2766,9 +3243,13 @@ export class GameScene extends Phaser.Scene {
         this.addText(
           640,
           520,
-          variant.name,
+          this.enemyIsRare
+            ? `★ レア ${variant.name} ★`
+            : variant.name,
           26,
-          '#ffffff',
+          this.enemyIsRare
+            ? '#f4d35e'
+            : '#ffffff',
         ).setOrigin(0.5);
 
       enemyName.setStroke(
@@ -2779,6 +3260,26 @@ export class GameScene extends Phaser.Scene {
       this.addCombatObject(
         enemyName,
       );
+
+      if (this.enemyIsRare) {
+        const rareLabel =
+          this.addText(
+            640,
+            555,
+            'RARE！報酬2倍',
+            22,
+            '#f4d35e',
+          ).setOrigin(0.5);
+
+        rareLabel.setStroke(
+          '#264653',
+          3,
+        );
+
+        this.addCombatObject(
+          rareLabel,
+        );
+      }
     } else {
       const respawnText =
         this.addText(
@@ -2814,19 +3315,27 @@ export class GameScene extends Phaser.Scene {
       unlockedVariantCount === 1
     ) {
       this.enemyVariantIndex = 0;
-      return;
+    } else {
+      const offset =
+        Phaser.Math.Between(
+          1,
+          unlockedVariantCount - 1,
+        );
+
+      this.enemyVariantIndex =
+        (
+          this.enemyVariantIndex +
+          offset
+        ) %
+        unlockedVariantCount;
     }
 
-    const offset =
-      Phaser.Math.Between(
+    // ★ 新しい敵が出現するたびに20%でレア判定
+    this.enemyIsRare =
+      Phaser.Math.FloatBetween(
+        0,
         1,
-        unlockedVariantCount - 1,
-      );
-
-    this.enemyVariantIndex =
-      (this.enemyVariantIndex +
-        offset) %
-      unlockedVariantCount;
+      ) < RARE_ENEMY_CHANCE;
   }
 
   private addEnemyVisual<
@@ -2847,7 +3356,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private clearCombatants(): void {
-    for (const object of this.combatObjects) {
+    for (
+      const object of this.combatObjects
+    ) {
       object.destroy();
 
       const index =
@@ -2881,22 +3392,31 @@ export class GameScene extends Phaser.Scene {
 
   private resumeTimers(): void {
     if (this.respawnTimer) {
-      this.respawnTimer.paused = false;
+      this.respawnTimer.paused =
+        false;
+    }
+
+    if (this.enemyAttackTimer) {
+      this.enemyAttackTimer.paused =
+        false;
     }
   }
 
   private pauseTimers(): void {
     if (this.enemyAttackTimer) {
-      this.enemyAttackTimer.paused = true;
+      this.enemyAttackTimer.paused =
+        true;
     }
 
     if (this.respawnTimer) {
-      this.respawnTimer.paused = true;
+      this.respawnTimer.paused =
+        true;
     }
   }
 
   private stopEnemyAttackTimer(): void {
     this.enemyAttackTimer?.remove();
+
     this.enemyAttackTimer =
       undefined;
   }
@@ -2913,11 +3433,14 @@ export class GameScene extends Phaser.Scene {
   private clearScreen(): void {
     this.tweens.killAll();
 
-    for (const object of this.screenObjects) {
+    for (
+      const object of this.screenObjects
+    ) {
       object.destroy();
     }
 
     this.screenObjects = [];
+
     this.combatObjects = [];
     this.enemyVisuals = [];
 
@@ -2952,9 +3475,6 @@ export class GameScene extends Phaser.Scene {
 
     this.enemyAttackText =
       undefined;
-
-    this.lowHpOverlay =
-      undefined;
   }
 
   private addText(
@@ -2972,7 +3492,8 @@ export class GameScene extends Phaser.Scene {
         {
           fontFamily:
             'sans-serif',
-          fontSize: `${fontSize}px`,
+          fontSize:
+            `${fontSize}px`,
           color,
         },
       ),
@@ -2990,9 +3511,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private registerShopObject(
-    object: Phaser.GameObjects.GameObject & {
-      x: number;
-    },
+    object:
+      Phaser.GameObjects.GameObject & {
+        x: number;
+      },
     baseX: number,
   ): void {
     this.shopCardObjects.push({
