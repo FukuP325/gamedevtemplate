@@ -155,6 +155,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (this.mode === 'playing') {
+      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
+        this.showShop();
+        return;
+      }
       if (this.autoMode) {
         if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
           this.autoMode = false;
@@ -190,9 +194,6 @@ export class GameScene extends Phaser.Scene {
       }
       if (Phaser.Input.Keyboard.JustDown(this.fiveKey)) {
         this.usePotion();
-      }
-      if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
-        this.showShop();
       }
       this.updateSkillHud();
     } else if (this.mode === 'shop') {
@@ -1358,21 +1359,72 @@ export class GameScene extends Phaser.Scene {
     icon.setPosition(x, y);
     if (itemKind === 'ticket') {
       icon.fillStyle(0xf4d35e, 1);
-      icon.fillRoundedRect(-34, -24, 68, 48, 8);
-      icon.lineStyle(3, 0x9a6b00, 1);
-      icon.strokeRoundedRect(-34, -24, 68, 48, 8);
+      icon.fillRoundedRect(-42, -28, 84, 56, 8);
+      icon.lineStyle(4, 0x9a6b00, 1);
+      icon.strokeRoundedRect(-42, -28, 84, 56, 8);
+      icon.lineStyle(2, 0x9a6b00, 0.9);
+      icon.lineBetween(-18, -22, -18, 22);
+      icon.lineBetween(18, -22, 18, 22);
+      icon.fillStyle(0x264653, 1);
+      icon.fillCircle(0, 0, 12);
+      icon.fillStyle(0xf4d35e, 1);
+      icon.fillTriangle(6, 0, -3, -7, -3, 7);
       icon.fillStyle(0x9a6b00, 1);
-      icon.fillCircle(0, 0, 8);
+      icon.fillRect(-12, 15, 24, 3);
+      icon.fillRect(-8, -18, 16, 3);
       return icon;
     }
 
     if (itemKind === 'equipment') {
-      icon.fillStyle(0x457b9d, 1);
-      icon.fillRoundedRect(-32, -40, 64, 80, 12);
-      icon.lineStyle(5, 0x264653, 1);
-      icon.strokeRoundedRect(-32, -40, 64, 80, 12);
-      icon.fillStyle(0xf4d35e, 1);
-      icon.fillCircle(0, 0, 14);
+      icon.lineStyle(4, 0x264653, 1);
+      if (itemIndex === 0 || itemIndex === 4) {
+        const armorColor = itemIndex === 4 ? 0x6d597a : 0x457b9d;
+        icon.fillStyle(armorColor, 1);
+        icon.fillRoundedRect(-38, -34, 76, 68, 14);
+        icon.strokeRoundedRect(-38, -34, 76, 68, 14);
+        icon.lineBetween(0, -32, 0, 32);
+        icon.lineBetween(-30, -8, 30, -8);
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 8, itemIndex === 4 ? 10 : 7);
+      } else if (itemIndex === 1) {
+        icon.fillStyle(0x8d99ae, 1);
+        icon.fillTriangle(0, -44, -38, -10, 0, 44);
+        icon.fillTriangle(0, -44, 38, -10, 0, 44);
+        icon.strokeTriangle(0, -44, -38, -10, -30, 30);
+        icon.strokeTriangle(0, -44, 38, -10, 30, 30);
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 0, 10);
+      } else if (itemIndex === 2) {
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillCircle(0, 0, 28);
+        icon.lineStyle(4, 0x9a6b00, 1);
+        icon.strokeCircle(0, 0, 28);
+        icon.fillStyle(0x57cc99, 1);
+        icon.fillCircle(0, 0, 11);
+        icon.fillStyle(0xf8f9fa, 1);
+        icon.fillCircle(-4, -4, 4);
+      } else if (itemIndex === 3) {
+        icon.fillStyle(0xe76f51, 1);
+        icon.fillTriangle(0, -44, -42, 36, 42, 36);
+        icon.strokeTriangle(0, -44, -42, 36, 42, 36);
+        icon.lineStyle(5, 0xf4d35e, 1);
+        icon.lineBetween(-30, 18, 30, 18);
+        icon.lineStyle(4, 0x264653, 1);
+        icon.lineBetween(0, -34, 0, 30);
+      } else {
+        icon.fillStyle(0xf4d35e, 1);
+        icon.fillRect(-38, -28, 76, 14);
+        icon.fillRect(-28, -42, 14, 14);
+        icon.fillRect(-4, -42, 14, 14);
+        icon.fillRect(20, -42, 14, 14);
+        icon.lineStyle(4, 0x9a6b00, 1);
+        icon.strokeRect(-38, -28, 76, 14);
+        icon.lineBetween(-21, -42, -21, -28);
+        icon.lineBetween(3, -42, 3, -28);
+        icon.lineBetween(27, -42, 27, -28);
+        icon.fillStyle(0x57cc99, 1);
+        icon.fillCircle(0, 12, 12);
+      }
       return icon;
     }
 
