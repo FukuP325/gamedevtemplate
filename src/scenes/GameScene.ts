@@ -74,7 +74,6 @@ export class GameScene extends Phaser.Scene {
   private leftKey!: Phaser.Input.Keyboard.Key;
   private rightKey!: Phaser.Input.Keyboard.Key;
   private eKey!: Phaser.Input.Keyboard.Key;
-  private escKey!: Phaser.Input.Keyboard.Key;
   private enemyAttackTimer?: Phaser.Time.TimerEvent;
   private respawnTimer?: Phaser.Time.TimerEvent;
   private screenObjects: Phaser.GameObjects.GameObject[] = [];
@@ -104,9 +103,27 @@ export class GameScene extends Phaser.Scene {
   private skillCooldownRings: Phaser.GameObjects.Graphics[] = [];
   private confirmationObjects: Phaser.GameObjects.GameObject[] = [];
   private pauseOverlayObjects: Phaser.GameObjects.GameObject[] = [];
+  private returnToPauseAfterShop = false;
+  private pausedAt?: number;
   private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
+  private readonly escapeListener = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    if (this.mode === 'playing') {
+      this.showPause();
+    } else if (this.mode === 'paused') {
+      this.hidePause();
+    } else if (this.mode === 'shop') {
+      this.returnFromShop();
+    } else if (this.mode === 'gameOver' || this.mode === 'clear') {
+      this.resetGame();
+      this.showTitle();
+    }
+  };
 
   constructor() {
     super('GameScene');
@@ -126,8 +143,9 @@ export class GameScene extends Phaser.Scene {
     this.leftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
     this.rightKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
     this.eKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
-    this.escKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     keyboard.addCapture(['SPACE', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'E', 'ESC', 'LEFT', 'RIGHT']);
+    window.addEventListener('keydown', this.escapeListener);
+    this.events.once('shutdown', () => window.removeEventListener('keydown', this.escapeListener));
     this.showTitle();
   }
 
@@ -144,17 +162,9 @@ export class GameScene extends Phaser.Scene {
         this.showPlaying();
         return;
       }
-      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-        this.resetGame();
-        this.showTitle();
-        return;
-      }
     }
 
     if (this.mode === 'paused') {
-      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-        this.hidePause();
-      }
       return;
     }
 
@@ -180,9 +190,7 @@ export class GameScene extends Phaser.Scene {
       }
       this.updateSkillHud();
     } else if (this.mode === 'shop') {
-      if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-        this.showPlaying();
-      } else if (Phaser.Input.Keyboard.JustDown(this.leftKey)) {
+      if (Phaser.Input.Keyboard.JustDown(this.leftKey)) {
         this.scrollShop(1);
       } else if (Phaser.Input.Keyboard.JustDown(this.rightKey)) {
         this.scrollShop(-1);
@@ -256,6 +264,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showPause(): void {
+    if (this.mode === 'playing') {
+      this.pausedAt = this.time.now;
+    }
     this.mode = 'paused';
     this.pauseTimers();
     const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55));
@@ -269,7 +280,10 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects.push(pauseText);
     const shopButton = this.addScreenObject(this.add.rectangle(640, 360, 320, 72, 0x2a9d8f));
     shopButton.setInteractive({ useHandCursor: true });
-    shopButton.on('pointerdown', () => this.showShop());
+    shopButton.on('pointerdown', () => {
+      this.returnToPauseAfterShop = true;
+      this.showShop();
+    });
     this.pauseOverlayObjects.push(shopButton);
     const shopButtonText = this.addScreenObject(this.add.text(640, 360, 'ショップへ', {
       fontFamily: 'sans-serif',
@@ -280,6 +294,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private hidePause(): void {
+    this.applyPausedDuration();
     for (const object of this.pauseOverlayObjects) {
       const index = this.screenObjects.indexOf(object);
       if (index >= 0) {
@@ -290,6 +305,18 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects = [];
     this.mode = 'playing';
     this.resumeTimers();
+  }
+
+  private returnFromShop(): void {
+    const shouldReturnToPause = this.returnToPauseAfterShop;
+    this.returnToPauseAfterShop = false;
+    if (shouldReturnToPause) {
+      this.applyPausedDuration();
+    }
+    this.showPlaying();
+    if (shouldReturnToPause) {
+      this.showPause();
+    }
   }
 
   private showShop(category: ShopCategory = this.shopCategory): void {
@@ -399,7 +426,7 @@ export class GameScene extends Phaser.Scene {
     this.addText(GAME_WIDTH / 2, 585, '左右キーまたは矢印ボタンで商品をスクロール', 20, '#457b9d').setOrigin(0.5);
     const backButton = this.addScreenObject(this.add.rectangle(640, 660, 240, 50, 0x457b9d));
     backButton.setInteractive({ useHandCursor: true });
-    backButton.on('pointerdown', () => this.showPlaying());
+    backButton.on('pointerdown', () => this.returnFromShop());
     this.addText(640, 660, '戻る (ESC)', 22, '#ffffff').setOrigin(0.5);
   }
 
@@ -1193,6 +1220,18 @@ export class GameScene extends Phaser.Scene {
 
   private getSkillRemaining(lastUsedAt: number, cooldown: number): number {
     return Math.max(0, cooldown - (this.time.now - lastUsedAt));
+  }
+
+  private applyPausedDuration(): void {
+    if (this.pausedAt === undefined) {
+      return;
+    }
+    const pausedDuration = this.time.now - this.pausedAt;
+    this.lastSkillAt += pausedDuration;
+    this.lastMoneyPunchAt += pausedDuration;
+    this.lastHealSkillAt += pausedDuration;
+    this.lastRapidSkillAt += pausedDuration;
+    this.pausedAt = undefined;
   }
 
   private addHpBar(x: number, y: number, width: number, color: number): Phaser.GameObjects.Rectangle {
