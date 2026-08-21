@@ -234,10 +234,10 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionBaseMaxHp = undefined;
     this.healthPotionTimer?.remove();
     this.healthPotionTimer = undefined;
-    this.weaponIndex = 1;
+    this.weaponIndex = 0;
     this.purchasedWeapons.clear();
     this.weaponDurability.clear();
-    this.weaponDurability.set(1, WEAPONS[1].durability);
+    this.weaponDurability.set(0, WEAPONS[0].durability);
     this.purchasedEquipments.clear();
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -298,7 +298,7 @@ export class GameScene extends Phaser.Scene {
 
     const items = category === 'weapon'
       ? [
-        ...WEAPONS.slice(2).map((item) => ({ ...item, kind: 'weapon' as const })),
+        ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
         { name: '脱出チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
       ]
       : category === 'equipment'
@@ -346,7 +346,7 @@ export class GameScene extends Phaser.Scene {
       button.setInteractive({ useHandCursor: true });
       const label = this.addText(x, 510, '', 23, '#ffffff').setOrigin(0.5);
       this.registerShopObject(label, x);
-      const weaponIndex = item.kind === 'weapon' ? index + 2 : -1;
+      const weaponIndex = item.kind === 'weapon' ? index + 1 : -1;
       const equipmentIndex = item.kind === 'equipment' ? index : -1;
       const purchased = item.kind === 'weapon'
         ? this.purchasedWeapons.has(weaponIndex)
@@ -395,7 +395,7 @@ export class GameScene extends Phaser.Scene {
 
   private purchase(itemIndex: number, itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket'): void {
     if (itemKind === 'weapon') {
-      const weaponIndex = itemIndex + 2;
+      const weaponIndex = itemIndex + 1;
       const weapon = WEAPONS[weaponIndex];
       const requiredWeaponIndex = this.getRequiredWeaponIndex(weaponIndex);
       if (
