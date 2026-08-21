@@ -21,6 +21,9 @@ export const CLEAR_TICKET_PRICE = 10000;
 export const POTION_PRICE = 100;
 export const STRENGTH_POTION_PRICE = 250;
 export const WEAKNESS_POTION_PRICE = 500;
+export const HEALTH_POTION_PRICE = 600;
+export const DEFENSE_POTION_PRICE = 650;
+export const CONFUSION_POTION_PRICE = 850;
 
 export type Equipment = {
   name: string;
@@ -60,10 +63,16 @@ export type Weapon = {
 };
 
 export const WEAPONS: readonly Weapon[] = [
-  { name: '駆け出しの剣', attackPower: 10, durability: null, price: 0 },
+  { name: '拳', attackPower: 5, durability: null, price: 0 },
+  { name: '駆け出しの剣', attackPower: 10, durability: 15, price: 0 },
   { name: '鉄の剣', attackPower: 20, durability: 30, price: 150 },
   { name: '鋼の剣', attackPower: 40, durability: 100, price: 250 },
-  { name: '炎の剣', attackPower: 60, durability: 60, price: 500 },
-  { name: '雷鳴の剣', attackPower: 80, durability: 60, price: 750 },
-  { name: '聖剣エターナル', attackPower: 100, durability: null, price: 1000 },
+  { name: '破砕の剣', attackPower: 60, durability: 200, price: 500 },
+  { name: '神速の剣', attackPower: 80, durability: 40, price: 750 },
+  { name: '炎の剣', attackPower: 100, durability: 60, price: 1000 },
+  { name: '雷鳴の剣', attackPower: 120, durability: 60, price: 1250 },
+  { name: '業火の剣', attackPower: 140, durability: 70, price: 1500 },
+  { name: '天雷の剣', attackPower: 160, durability: 70, price: 1750 },
+  { name: '邪剣アビス', attackPower: 180, durability: null, price: 2000 },
+  { name: '聖剣エターナル', attackPower: 200, durability: null, price: 2500 },
 ];
