@@ -30,7 +30,7 @@ import {
   WEAPONS,
 } from '../game/constants';
 
-type GameMode = 'title' | 'playing' | 'paused' | 'shop' | 'gameOver' | 'clear';
+type GameMode = 'title' | 'playing' | 'paused' | 'skillTree' | 'shop' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment' | 'potion';
 
 export class GameScene extends Phaser.Scene {
@@ -38,6 +38,8 @@ export class GameScene extends Phaser.Scene {
   private playerHp = PLAYER_MAX_HP;
   private playerMaxHp = PLAYER_MAX_HP;
   private level = 1;
+  private skillPoints = 0;
+  private skillLevels = [1, 0, 0, 0];
   private defeatedCount = 0;
   private enemyMaxHp = ENEMY_MAX_HP;
   private enemyHp = ENEMY_MAX_HP;
@@ -109,6 +111,7 @@ export class GameScene extends Phaser.Scene {
   private skillCooldownRings: Phaser.GameObjects.Graphics[] = [];
   private confirmationObjects: Phaser.GameObjects.GameObject[] = [];
   private pauseOverlayObjects: Phaser.GameObjects.GameObject[] = [];
+  private skillTreeObjects: Phaser.GameObjects.GameObject[] = [];
   private returnToPauseAfterShop = false;
   private pausedAt?: number;
   private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
@@ -123,6 +126,8 @@ export class GameScene extends Phaser.Scene {
       this.showPause();
     } else if (this.mode === 'paused') {
       this.hidePause();
+    } else if (this.mode === 'skillTree') {
+      this.showPause();
     } else if (this.mode === 'shop') {
       this.returnFromShop();
     } else if (this.mode === 'gameOver' || this.mode === 'clear') {
@@ -222,6 +227,8 @@ export class GameScene extends Phaser.Scene {
     this.playerHp = PLAYER_MAX_HP;
     this.playerMaxHp = PLAYER_MAX_HP;
     this.level = 1;
+    this.skillPoints = 0;
+    this.skillLevels = [1, 0, 0, 0];
     this.defeatedCount = 0;
     this.enemyMaxHp = ENEMY_MAX_HP;
     this.enemyHp = this.enemyMaxHp;
@@ -285,6 +292,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showPause(): void {
+    this.clearSkillTree();
     if (this.mode === 'playing') {
       this.pausedAt = this.time.now;
     }
@@ -312,18 +320,127 @@ export class GameScene extends Phaser.Scene {
       color: '#ffffff',
     }).setOrigin(0.5));
     this.pauseOverlayObjects.push(shopButtonText);
+    const skillTreeButton = this.addScreenObject(this.add.rectangle(640, 455, 320, 72, 0x457b9d));
+    skillTreeButton.setInteractive({ useHandCursor: true });
+    skillTreeButton.on('pointerdown', () => this.showSkillTree());
+    this.pauseOverlayObjects.push(skillTreeButton);
+    const skillTreeButtonText = this.addScreenObject(this.add.text(640, 455, 'スキルツリー', {
+      fontFamily: 'sans-serif',
+      fontSize: '28px',
+      color: '#ffffff',
+    }).setOrigin(0.5));
+    this.pauseOverlayObjects.push(skillTreeButtonText);
+  }
+
+  private showSkillTree(): void {
+    this.clearPauseOverlay();
+    this.clearSkillTree();
+    this.mode = 'skillTree';
+    const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.82));
+    overlay.setInteractive();
+    this.skillTreeObjects.push(overlay);
+    const panel = this.addScreenObject(this.add.rectangle(640, 360, 760, 500, 0x264653, 0.98));
+    panel.setStrokeStyle(4, 0xf4d35e, 1);
+    this.skillTreeObjects.push(panel);
+    const title = this.addScreenObject(this.add.text(640, 155, 'スキルツリー', {
+      fontFamily: 'sans-serif',
+      fontSize: '48px',
+      color: '#f4d35e',
+    }).setOrigin(0.5));
+    this.skillTreeObjects.push(title);
+    const pointsText = this.addScreenObject(this.add.text(640, 195, `スキルポイント: ${this.skillPoints}`, {
+      fontFamily: 'sans-serif',
+      fontSize: '22px',
+      color: '#57cc99',
+    }).setOrigin(0.5));
+    this.skillTreeObjects.push(pointsText);
+    const tree = this.addScreenObject(this.add.graphics());
+    tree.lineStyle(12, 0x6b4226, 1);
+    tree.lineBetween(640, 445, 640, 350);
+    tree.lineStyle(8, 0x6b4226, 1);
+    tree.lineBetween(640, 370, 520, 285);
+    tree.lineBetween(640, 370, 760, 285);
+    tree.lineBetween(520, 285, 450, 235);
+    tree.lineBetween(520, 285, 590, 235);
+    tree.lineBetween(760, 285, 690, 235);
+    tree.lineBetween(760, 285, 830, 235);
+    this.skillTreeObjects.push(tree);
+
+    const nodes = [
+      { x: 640, y: 445, skillIndex: 0, label: '1 連続攻撃', requirement: 1 },
+      { x: 520, y: 285, skillIndex: 1, label: '2 金の一撃', requirement: 2 },
+      { x: 760, y: 285, skillIndex: 2, label: '3 札束パンチ', requirement: 3 },
+      { x: 450, y: 235, skillIndex: 3, label: '4 完全回復', requirement: 2 },
+    ];
+    for (const node of nodes) {
+      const skillLevel = this.skillLevels[node.skillIndex];
+      const unlocked = skillLevel > 0;
+      const canUpgrade = unlocked ? skillLevel < 3 : this.level >= node.requirement;
+      const nodeGraphic = this.addScreenObject(this.add.graphics());
+      nodeGraphic.fillStyle(unlocked ? 0x57cc99 : 0x53616f, 1);
+      nodeGraphic.fillCircle(node.x, node.y, 24);
+      nodeGraphic.lineStyle(4, unlocked ? 0xf4d35e : 0xd9e2ec, 1);
+      nodeGraphic.strokeCircle(node.x, node.y, 24);
+      nodeGraphic.fillStyle(unlocked ? 0xe8f5e9 : 0xadb5bd, 1);
+      nodeGraphic.fillCircle(node.x, node.y, 8);
+      nodeGraphic.setInteractive(new Phaser.Geom.Circle(node.x, node.y, 30), Phaser.Geom.Circle.Contains);
+      nodeGraphic.on('pointerdown', () => this.upgradeSkill(node.skillIndex));
+      this.skillTreeObjects.push(nodeGraphic);
+      const label = this.addScreenObject(this.add.text(node.x, node.y + 34, node.label, {
+        fontFamily: 'sans-serif',
+        fontSize: '18px',
+        color: unlocked ? '#57cc99' : '#d9e2ec',
+      }).setOrigin(0.5));
+      this.skillTreeObjects.push(label);
+      const detail = this.addScreenObject(this.add.text(node.x, node.y + 56, '', {
+        fontFamily: 'sans-serif',
+        fontSize: '14px',
+        color: '#adb5bd',
+      }).setOrigin(0.5).setText(
+        unlocked ? `Lv.${skillLevel}${skillLevel < 3 ? '　SP1で強化' : '　最大Lv.'}` : canUpgrade ? 'SP1で解放' : `Lv.${node.requirement}で解放`,
+      ));
+      this.skillTreeObjects.push(detail);
+    }
+    const backButton = this.addScreenObject(this.add.rectangle(640, 540, 260, 56, 0x457b9d));
+    backButton.setInteractive({ useHandCursor: true });
+    backButton.on('pointerdown', () => this.showPause());
+    this.skillTreeObjects.push(backButton);
+    const backText = this.addScreenObject(this.add.text(640, 540, '戻る (Esc)', {
+      fontFamily: 'sans-serif',
+      fontSize: '22px',
+      color: '#ffffff',
+    }).setOrigin(0.5));
+    this.skillTreeObjects.push(backText);
+  }
+
+  private upgradeSkill(skillIndex: number): void {
+    const currentLevel = this.skillLevels[skillIndex] ?? 0;
+    const requiredLevel = [1, 2, 3, 2][skillIndex];
+    if (this.skillPoints <= 0 || currentLevel >= 3 || this.level < requiredLevel) {
+      return;
+    }
+    this.skillPoints -= 1;
+    this.skillLevels[skillIndex] = currentLevel + 1;
+    this.showSkillTree();
+  }
+
+  private clearPauseOverlay(): void {
+    for (const object of this.pauseOverlayObjects) {
+      this.removeScreenObject(object);
+    }
+    this.pauseOverlayObjects = [];
+  }
+
+  private clearSkillTree(): void {
+    for (const object of this.skillTreeObjects) {
+      this.removeScreenObject(object);
+    }
+    this.skillTreeObjects = [];
   }
 
   private hidePause(): void {
     this.applyPausedDuration();
-    for (const object of this.pauseOverlayObjects) {
-      const index = this.screenObjects.indexOf(object);
-      if (index >= 0) {
-        this.screenObjects.splice(index, 1);
-      }
-      object.destroy();
-    }
-    this.pauseOverlayObjects = [];
+    this.clearPauseOverlay();
     this.mode = 'playing';
     this.resumeTimers();
   }
@@ -569,6 +686,7 @@ export class GameScene extends Phaser.Scene {
     }
     this.confirmationObjects = [];
     this.pauseOverlayObjects = [];
+    this.clearSkillTree();
     this.pendingPurchase = undefined;
     for (const button of this.shopButtons) {
       if (button.input) {
@@ -616,19 +734,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private useSkill(): void {
-    if (!this.enemyAlive || this.level < 2 || this.time.now - this.lastSkillAt < SKILL_COOLDOWN) {
+    if (!this.enemyAlive || this.skillLevels[1] <= 0 || this.time.now - this.lastSkillAt < SKILL_COOLDOWN) {
       return;
     }
     this.lastSkillAt = this.time.now;
     this.playGoldStrikeEffect();
-    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * SKILL_DAMAGE_MULTIPLIER);
+    const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * (SKILL_DAMAGE_MULTIPLIER + (this.skillLevels[1] - 1) * 0.5));
     this.applyDamage(attackDamage, '#f4d35e');
     this.applyWeaponEffects(false, attackDamage);
     this.consumeWeaponDurability();
   }
 
   private useMoneyPunchSkill(): void {
-    if (!this.enemyAlive || this.level < 3 || this.time.now - this.lastMoneyPunchAt < MONEY_PUNCH_COOLDOWN) {
+    if (!this.enemyAlive || this.skillLevels[2] <= 0 || this.time.now - this.lastMoneyPunchAt < MONEY_PUNCH_COOLDOWN) {
       return;
     }
     this.lastMoneyPunchAt = this.time.now;
@@ -636,7 +754,7 @@ export class GameScene extends Phaser.Scene {
     this.moneyPunchTimer = this.time.delayedCall(350, () => {
       this.moneyPunchTimer = undefined;
       if (this.mode === 'playing' && this.enemyAlive) {
-        const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 7);
+        const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * (7 + (this.skillLevels[2] - 1)));
         this.applyDamage(attackDamage, '#57cc99');
         this.applyWeaponEffects(false, attackDamage);
         this.consumeWeaponDurability();
@@ -645,7 +763,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private useHealSkill(): void {
-    if (this.level < 2 || this.time.now - this.lastHealSkillAt < HEAL_SKILL_COOLDOWN) {
+    if (this.skillLevels[3] <= 0 || this.time.now - this.lastHealSkillAt < HEAL_SKILL_COOLDOWN) {
       return;
     }
     const recovery = this.playerMaxHp - this.playerHp;
@@ -913,6 +1031,9 @@ export class GameScene extends Phaser.Scene {
     this.defeatedCount += 1;
     if (this.defeatedCount % KILLS_PER_LEVEL === 0 && this.level < 3) {
       this.level += 1;
+      this.skillPoints += 1;
+      this.showLevelUpEffect();
+      this.showFloatingText('スキルポイント +1', '#57cc99', 400);
       this.money += 100;
       this.playerMaxHp += 20;
       this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 20);
@@ -1087,7 +1208,7 @@ export class GameScene extends Phaser.Scene {
 
   private updateHud(): void {
     this.hudText?.setText([
-      `レベル: ${this.level}  撃破数: ${this.defeatedCount}`,
+      `レベル: ${this.level}  撃破数: ${this.defeatedCount}  SP: ${this.skillPoints}`,
       `所持金: ${this.money}円`,
       `装備中: ${WEAPONS[this.weaponIndex].name} (攻撃力 ${this.getPlayerAttackPower()})`,
       `スキル: ${this.getSelectedSkillNames()}`,
@@ -1199,10 +1320,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const available = [
-      this.getSkillRemaining(this.lastRapidSkillAt, RAPID_SKILL_COOLDOWN) === 0,
-      this.level >= 2 && this.getSkillRemaining(this.lastSkillAt, SKILL_COOLDOWN) === 0,
-      this.level >= 3 && this.getSkillRemaining(this.lastMoneyPunchAt, MONEY_PUNCH_COOLDOWN) === 0,
-      this.level >= 2 && this.getSkillRemaining(this.lastHealSkillAt, HEAL_SKILL_COOLDOWN) === 0,
+      this.skillLevels[0] > 0 && this.getSkillRemaining(this.lastRapidSkillAt, RAPID_SKILL_COOLDOWN) === 0,
+      this.skillLevels[1] > 0 && this.getSkillRemaining(this.lastSkillAt, SKILL_COOLDOWN) === 0,
+      this.skillLevels[2] > 0 && this.getSkillRemaining(this.lastMoneyPunchAt, MONEY_PUNCH_COOLDOWN) === 0,
+      this.skillLevels[3] > 0 && this.getSkillRemaining(this.lastHealSkillAt, HEAL_SKILL_COOLDOWN) === 0,
     ];
     for (let index = 0; index < this.skillButtons.length; index += 1) {
       this.skillButtons[index].setFillStyle(available[index] ? 0x2a9d8f : 0x53616f);
