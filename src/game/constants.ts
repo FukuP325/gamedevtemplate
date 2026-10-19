@@ -4,7 +4,7 @@ export const PLAYER_MAX_HP = 150;
 export const ENEMY_MAX_HP = 100;
 export const ENEMY_HP_INCREASE = 50;
 export const ENEMY_ATTACK_INTERVAL = 1000;
-export const ENEMY_ATTACK_INCREASE = 3;
+export const ENEMY_ATTACK_INCREASE = 1;
 export const PLAYER_ATTACK_INTERVAL = 200;
 export const AUTO_ATTACK_INTERVAL = 800;
 export const AUTO_MODE_HOLD_DURATION = 1000;
@@ -50,14 +50,25 @@ export type EnemyVariant = {
   shape: 'slime' | 'goblin' | 'golem';
   bodyColor: number;
   headColor: number;
+  hpBonus: number;
   attackPower: number;
   reward: number;
 };
 
 export const ENEMY_VARIANTS: readonly EnemyVariant[] = [
-  { name: 'スライム', shape: 'slime', bodyColor: 0x57cc99, headColor: 0x2a9d8f, attackPower: 3, reward: 50 },
-  { name: 'ゴブリン', shape: 'goblin', bodyColor: 0xe76f51, headColor: 0x6d597a, attackPower: 6, reward: 100 },
-  { name: 'ゴーレム', shape: 'golem', bodyColor: 0x8d99ae, headColor: 0x495057, attackPower: 9, reward: 200 },
+  { name: 'スライム', shape: 'slime', bodyColor: 0x57cc99, headColor: 0x2a9d8f, hpBonus: 0, attackPower: 3, reward: 50 },
+  { name: 'ゴブリン', shape: 'goblin', bodyColor: 0xe76f51, headColor: 0x6d597a, hpBonus: 10, attackPower: 6, reward: 100 },
+  { name: 'ゴーレム', shape: 'golem', bodyColor: 0x8d99ae, headColor: 0x495057, hpBonus: 20, attackPower: 9, reward: 200 },
+  { name: 'コウモリ', shape: 'slime', bodyColor: 0x695c8f, headColor: 0xd6c3ff, hpBonus: 20, attackPower: 10, reward: 220 },
+  { name: 'マタンゴ', shape: 'slime', bodyColor: 0x9b5b75, headColor: 0xf2a7c5, hpBonus: 30, attackPower: 11, reward: 250 },
+  { name: 'スケルトン', shape: 'goblin', bodyColor: 0xe6dfc8, headColor: 0xb8ad91, hpBonus: 45, attackPower: 13, reward: 310 },
+  { name: 'ウェアウルフ', shape: 'goblin', bodyColor: 0x8f5e3b, headColor: 0x5b3928, hpBonus: 60, attackPower: 15, reward: 380 },
+  { name: 'アイスゴーレム', shape: 'golem', bodyColor: 0x8ed8e8, headColor: 0x438da8, hpBonus: 75, attackPower: 17, reward: 460 },
+  { name: '魔女', shape: 'goblin', bodyColor: 0x57436d, headColor: 0xc2a0d8, hpBonus: 90, attackPower: 19, reward: 550 },
+  { name: 'ヴァンパイア', shape: 'goblin', bodyColor: 0x7e3546, headColor: 0xc17a88, hpBonus: 105, attackPower: 21, reward: 650 },
+  { name: 'ワイバーン', shape: 'golem', bodyColor: 0x4f936f, headColor: 0x245740, hpBonus: 120, attackPower: 23, reward: 770 },
+  { name: 'デーモン', shape: 'goblin', bodyColor: 0xb34e3f, headColor: 0x6b252d, hpBonus: 140, attackPower: 25, reward: 900 },
+  { name: '古代竜', shape: 'golem', bodyColor: 0xc18b42, headColor: 0x765126, hpBonus: 160, attackPower: 28, reward: 1100 },
 ];
 
 export type Weapon = {
