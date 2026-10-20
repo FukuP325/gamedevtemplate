@@ -6,8 +6,6 @@ export const ENEMY_HP_INCREASE = 50;
 export const ENEMY_ATTACK_INTERVAL = 1000;
 export const ENEMY_ATTACK_INCREASE = 1;
 export const PLAYER_ATTACK_INTERVAL = 200;
-export const AUTO_ATTACK_INTERVAL = 800;
-export const AUTO_MODE_HOLD_DURATION = 1000;
 export const SKILL_COOLDOWN = 5000;
 export const SKILL_DAMAGE_MULTIPLIER = 3;
 export const MONEY_PUNCH_COOLDOWN = 8000;
@@ -17,7 +15,7 @@ export const KILLS_PER_LEVEL = 3;
 export const ENEMY_DEFEAT_HEAL = 30;
 export const ENEMY_RESPAWN_MIN = 500;
 export const ENEMY_RESPAWN_MAX = 1000;
-export const CLEAR_TICKET_PRICE = 1000000;
+export const CLEAR_TICKET_PRICE = 100000;
 
 export const POTION_PRICE = 100;
 export const STRENGTH_POTION_PRICE = 250;

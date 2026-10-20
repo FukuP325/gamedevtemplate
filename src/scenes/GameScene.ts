@@ -33,12 +33,16 @@ import {
 type GameMode = 'title' | 'playing' | 'paused' | 'enemyBook' | 'skillTree' | 'shop' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment' | 'potion';
 
+const EFFECT_DEPTH = 20;
+const TECHNIQUE_NAMES = ['連撃', '金の一撃', '札束パンチ', '回復'];
+
 export class GameScene extends Phaser.Scene {
   private mode: GameMode = 'title';
   private playerHp = PLAYER_MAX_HP;
   private playerMaxHp = PLAYER_MAX_HP;
   private level = 1;
   private skillPoints = 0;
+  private unlockedSkillIds = new Set<number>();
   private skillLevels = [1, 0, 0, 0];
   private defeatedCount = 0;
   private enemyMaxHp = ENEMY_MAX_HP;
@@ -55,7 +59,7 @@ export class GameScene extends Phaser.Scene {
   private defensePotionCount = 1;
   private defensePotionActive = false;
   private confusionPotionCount = 1;
-  private enemyConfused = false;
+  private enemyWeakened = false;
   private strengthPotionAttacksRemaining = 0;
   private vampiricAttackCount = 0;
   private healthPotionBaseMaxHp?: number;
@@ -121,6 +125,9 @@ export class GameScene extends Phaser.Scene {
   private returnToPauseAfterShop = false;
   private returnToPauseAfterSkillTree = false;
   private returnToPauseAfterEnemyBook = false;
+  private debugMode = false;
+  private debugPanel?: Phaser.GameObjects.Rectangle;
+  private debugText?: Phaser.GameObjects.Text;
   private pausedAt?: number;
   private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
   private playerHpBar?: Phaser.GameObjects.Rectangle;
@@ -144,6 +151,19 @@ export class GameScene extends Phaser.Scene {
       this.resetGame();
       this.showTitle();
     }
+  };
+  private readonly debugListener = (event: KeyboardEvent): void => {
+    if (!event.ctrlKey || event.key.toLowerCase() !== 'd') {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.repeat) {
+      return;
+    }
+
+    this.debugMode = !this.debugMode;
+    this.updateDebugOverlay();
   };
 
   constructor() {
@@ -172,11 +192,16 @@ export class GameScene extends Phaser.Scene {
     this.eKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
     keyboard.addCapture(['SPACE', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'ZERO', 'E', 'ESC', 'LEFT', 'RIGHT']);
     window.addEventListener('keydown', this.escapeListener);
-    this.events.once('shutdown', () => window.removeEventListener('keydown', this.escapeListener));
+    window.addEventListener('keydown', this.debugListener);
+    this.events.once('shutdown', () => {
+      window.removeEventListener('keydown', this.escapeListener);
+      window.removeEventListener('keydown', this.debugListener);
+    });
     this.showTitle();
   }
 
   update(): void {
+    this.updateDebugOverlay();
     if (this.mode === 'title' && Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
       this.resetGame();
       this.showPlaying();
@@ -255,6 +280,7 @@ export class GameScene extends Phaser.Scene {
     this.returnToPauseAfterEnemyBook = false;
     this.level = 1;
     this.skillPoints = 0;
+    this.unlockedSkillIds.clear();
     this.skillLevels = [1, 0, 0, 0];
     this.defeatedCount = 0;
     this.enemyMaxHp = ENEMY_MAX_HP;
@@ -274,7 +300,7 @@ export class GameScene extends Phaser.Scene {
     this.defensePotionCount = 1;
     this.defensePotionActive = false;
     this.confusionPotionCount = 1;
-    this.enemyConfused = false;
+    this.enemyWeakened = false;
     this.strengthPotionAttacksRemaining = 0;
     this.vampiricAttackCount = 0;
     this.healthPotionBaseMaxHp = undefined;
@@ -299,8 +325,8 @@ export class GameScene extends Phaser.Scene {
     panel.setStrokeStyle(6, 0xf4d35e, 1);
     this.addText(GAME_WIDTH / 2, 145, '金', 76, '#f4d35e').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 235, '敵を倒して、お金を集めよう', 28, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 300, '目標：10,000円のクリアチケットを購入する', 22, '#457b9d').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 360, 'SPACEキーを1秒長押し：自動モード', 22, '#264653').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 300, '目標：100,000円のクリアチケットを購入する', 22, '#457b9d').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 360, '敵をクリックして攻撃', 22, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 405, '1〜4：スキル  Esc：ポーズメニュー', 22, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 450, '敵を倒すとお金を獲得、HPが一部回復', 20, '#457b9d').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 560, 'スペースキーで開始', 30, '#e76f51').setOrigin(0.5);
@@ -327,16 +353,21 @@ export class GameScene extends Phaser.Scene {
     }
     this.mode = 'paused';
     this.pauseTimers();
+    for (const visual of this.enemyVisuals) {
+      this.tweens.killTweensOf(visual);
+    }
+    this.drawCombatants();
     const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55));
+    overlay.setDepth(1000);
     overlay.setInteractive();
     this.pauseOverlayObjects.push(overlay);
     const pauseText = this.addScreenObject(this.add.text(640, 180, 'pause', {
       fontFamily: 'sans-serif',
       fontSize: '64px',
       color: '#ffffff',
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(pauseText);
-    const shopButton = this.addScreenObject(this.add.rectangle(640, 360, 320, 72, 0x2a9d8f));
+    const shopButton = this.addScreenObject(this.add.rectangle(640, 360, 320, 72, 0x2a9d8f).setDepth(1001));
     shopButton.setInteractive({ useHandCursor: true });
     shopButton.on('pointerdown', () => {
       this.returnToPauseAfterShop = true;
@@ -347,19 +378,19 @@ export class GameScene extends Phaser.Scene {
       fontFamily: 'sans-serif',
       fontSize: '28px',
       color: '#ffffff',
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(shopButtonText);
-    const skillTreeButton = this.addScreenObject(this.add.rectangle(640, 455, 320, 72, 0x457b9d));
+    const skillTreeButton = this.addScreenObject(this.add.rectangle(640, 455, 320, 72, 0x457b9d).setDepth(1001));
     skillTreeButton.setInteractive({ useHandCursor: true });
-    skillTreeButton.on('pointerdown', () => this.showSkillTree());
+    skillTreeButton.on('pointerdown', () => this.showSkillTree(true));
     this.pauseOverlayObjects.push(skillTreeButton);
     const skillTreeButtonText = this.addScreenObject(this.add.text(640, 455, 'スキルツリー', {
       fontFamily: 'sans-serif',
       fontSize: '28px',
       color: '#ffffff',
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(skillTreeButtonText);
-    const enemyBookButton = this.addScreenObject(this.add.rectangle(640, 550, 320, 72, 0x6d597a));
+    const enemyBookButton = this.addScreenObject(this.add.rectangle(640, 550, 320, 72, 0x6d597a).setDepth(1001));
     enemyBookButton.setInteractive({ useHandCursor: true });
     enemyBookButton.on('pointerdown', () => this.showEnemyBook(true));
     this.pauseOverlayObjects.push(enemyBookButton);
@@ -367,7 +398,7 @@ export class GameScene extends Phaser.Scene {
       fontFamily: 'sans-serif',
       fontSize: '28px',
       color: '#ffffff',
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(enemyBookButtonText);
   }
 
@@ -431,22 +462,74 @@ export class GameScene extends Phaser.Scene {
     const headColor = discovered ? variant.headColor : 0x0b1118;
 
     if (variant.shape === 'slime') {
+      if (variant.name === 'コウモリ') {
+        portrait.fillStyle(bodyColor, 1);
+        portrait.fillTriangle(-22, -3, -54, -30, -43, 20);
+        portrait.fillTriangle(22, -3, 54, -30, 43, 20);
+        portrait.lineStyle(3, discovered ? 0x302943 : bodyColor, 1);
+        portrait.strokeTriangle(-22, -3, -54, -30, -43, 20);
+        portrait.strokeTriangle(22, -3, 54, -30, 43, 20);
+      }
       portrait.fillStyle(bodyColor, 1);
       portrait.fillEllipse(0, 10, 72, 48);
+      portrait.lineStyle(4, discovered ? 0x264653 : bodyColor, 0.9);
+      portrait.strokeEllipse(0, 10, 72, 48);
       if (discovered) {
         portrait.fillStyle(0xf8f9fa, 1);
         portrait.fillCircle(-13, 0, 5);
         portrait.fillCircle(13, 0, 5);
+        portrait.fillStyle(0x212529, 1);
+        portrait.fillCircle(-13, 0, 2);
+        portrait.fillCircle(13, 0, 2);
+      }
+      if (variant.name === 'マタンゴ') {
+        portrait.fillStyle(discovered ? variant.headColor : bodyColor, 1);
+        portrait.fillEllipse(0, -17, 58, 24);
+        portrait.lineStyle(3, discovered ? 0x59334d : bodyColor, 1);
+        portrait.strokeEllipse(0, -17, 58, 24);
+        portrait.fillStyle(discovered ? 0xffe7ef : bodyColor, 1);
+        portrait.fillCircle(-16, -18, 3);
+        portrait.fillCircle(0, -21, 3);
+        portrait.fillCircle(16, -18, 3);
       }
     } else if (variant.shape === 'golem') {
+      if (variant.name === 'ワイバーン' || variant.name === '古代竜') {
+        const wingColor = discovered ? variant.headColor : bodyColor;
+        portrait.fillStyle(wingColor, 1);
+        portrait.fillTriangle(-18, -2, -56, -35, -43, 20);
+        portrait.fillTriangle(18, -2, 56, -35, 43, 20);
+        portrait.lineStyle(3, discovered ? 0x264653 : bodyColor, 1);
+        portrait.lineBetween(-18, -2, -43, 20);
+        portrait.lineBetween(-18, -2, -56, -35);
+        portrait.lineBetween(18, -2, 43, 20);
+        portrait.lineBetween(18, -2, 56, -35);
+      }
       portrait.fillStyle(bodyColor, 1);
       portrait.fillRect(-29, -8, 58, 54);
+      portrait.lineStyle(4, discovered ? 0x264653 : bodyColor, 1);
+      portrait.strokeRect(-29, -8, 58, 54);
       portrait.fillStyle(headColor, 1);
       portrait.fillRect(-23, -43, 46, 34);
+      portrait.lineStyle(4, discovered ? 0x264653 : headColor, 1);
+      portrait.strokeRect(-23, -43, 46, 34);
       if (discovered) {
-        portrait.fillStyle(0xf4d35e, 1);
+        portrait.lineStyle(3, 0x26323c, 0.9);
+        portrait.lineBetween(-18, 2, -6, 12);
+        portrait.lineBetween(-6, 12, -14, 24);
+        portrait.lineBetween(17, 4, 8, 15);
+        portrait.fillStyle(variant.name === 'アイスゴーレム' ? 0xd7f7ff : 0xf4d35e, 1);
         portrait.fillCircle(-11, -27, 4);
         portrait.fillCircle(11, -27, 4);
+      }
+      if (variant.name === 'アイスゴーレム') {
+        portrait.fillStyle(discovered ? 0xd7f7ff : bodyColor, 1);
+        portrait.fillTriangle(-18, -40, -11, -58, -5, -40);
+        portrait.fillTriangle(-5, -40, 4, -63, 13, -40);
+        portrait.fillTriangle(12, -40, 20, -56, 27, -40);
+      } else if (variant.name === '古代竜') {
+        portrait.fillStyle(discovered ? 0xf0d59b : bodyColor, 1);
+        portrait.fillTriangle(-17, -39, -31, -57, -7, -42);
+        portrait.fillTriangle(17, -39, 31, -57, 7, -42);
       }
     } else {
       portrait.fillStyle(bodyColor, 1);
@@ -459,6 +542,42 @@ export class GameScene extends Phaser.Scene {
         portrait.fillStyle(0xf8f9fa, 1);
         portrait.fillCircle(-10, -28, 5);
         portrait.fillCircle(10, -28, 5);
+        portrait.fillStyle(0x212529, 1);
+        portrait.fillCircle(-10, -28, 2);
+        portrait.fillCircle(10, -28, 2);
+      }
+      if (variant.name === '魔女') {
+        portrait.fillStyle(discovered ? 0x33233f : bodyColor, 1);
+        portrait.fillTriangle(-30, -43, 0, -66, 30, -43);
+        portrait.fillRoundedRect(-34, -45, 68, 7, 3);
+        if (discovered) {
+          portrait.fillStyle(0xf4d35e, 1);
+          portrait.fillCircle(0, -43, 4);
+        }
+      } else if (variant.name === 'デーモン') {
+        portrait.fillStyle(discovered ? 0xe8d6ba : bodyColor, 1);
+        portrait.fillTriangle(-17, -39, -28, -62, -6, -43);
+        portrait.fillTriangle(17, -39, 28, -62, 6, -43);
+      } else if (variant.name === 'スケルトン') {
+        portrait.lineStyle(3, discovered ? 0xf0e8d5 : bodyColor, 1);
+        for (let ribY = 8; ribY <= 25; ribY += 7) {
+          portrait.beginPath();
+          portrait.arc(0, ribY, 19, Math.PI, Math.PI * 2);
+          portrait.strokePath();
+        }
+        portrait.lineBetween(0, 3, 0, 34);
+      } else if (variant.name === 'ウェアウルフ') {
+        portrait.fillStyle(discovered ? 0x3f3029 : bodyColor, 1);
+        portrait.fillEllipse(0, -12, 31, 16);
+      } else if (variant.name === 'ヴァンパイア') {
+        portrait.fillStyle(discovered ? 0x561d33 : bodyColor, 1);
+        portrait.fillTriangle(-17, -4, -43, 37, 0, 26);
+        portrait.fillTriangle(17, -4, 43, 37, 0, 26);
+        if (discovered) {
+          portrait.fillStyle(0xf8f9fa, 1);
+          portrait.fillTriangle(-7, -2, -4, 7, -1, -2);
+          portrait.fillTriangle(7, -2, 4, 7, 1, -2);
+        }
       }
     }
   }
@@ -531,8 +650,16 @@ export class GameScene extends Phaser.Scene {
           { name: '弱体化ポーション', effect: '敵のHPを下げる', attackPower: 0, price: WEAKNESS_POTION_PRICE, kind: 'potion' as const },
           { name: '体力のポーション', effect: 'HPを1.5倍にする（5分）', attackPower: 0, price: HEALTH_POTION_PRICE, kind: 'potion' as const },
           { name: '守りのポーション', effect: '防御力を上げる', attackPower: 0, price: DEFENSE_POTION_PRICE, kind: 'potion' as const },
-          { name: '混乱のポーション', effect: '敵を混乱させる', attackPower: 0, price: CONFUSION_POTION_PRICE, kind: 'potion' as const },
+          { name: '混乱のポーション', effect: '敵の攻撃力を半減', attackPower: 0, price: CONFUSION_POTION_PRICE, kind: 'potion' as const },
         ];
+    const potionCounts = [
+      this.potionCount,
+      this.strengthPotionCount,
+      this.weaknessPotionCount,
+      this.healthPotionCount,
+      this.defensePotionCount,
+      this.confusionPotionCount,
+    ];
     this.shopItemCount = items.length;
     items.forEach((item, index) => {
       const x = 180 + index * 290;
@@ -541,7 +668,8 @@ export class GameScene extends Phaser.Scene {
       this.registerShopObject(card, x);
       const icon = this.drawShopIcon(x, 270, index, item.kind);
       this.registerShopObject(icon, x);
-      const name = this.addText(x, 390, item.name, 28, '#264653').setOrigin(0.5);
+      const nameY = item.kind === 'potion' ? 365 : 390;
+      const name = this.addText(x, nameY, item.name, 28, '#264653').setOrigin(0.5);
       this.registerShopObject(name, x);
       if (item.kind === 'weapon') {
         const attackDetails = this.addText(x, 427, `攻撃力: ${item.attackPower}`, 20, '#457b9d').setOrigin(0.5);
@@ -557,9 +685,10 @@ export class GameScene extends Phaser.Scene {
         const detailText = item.kind === 'equipment'
           ? `最大HP +${item.hpBonus}\n${item.price}円`
           : item.kind === 'potion'
-            ? `${item.effect}\n${item.price}円`
+            ? `${item.effect}\n所持数: ${potionCounts[index]}個\n${item.price}円`
             : `${item.price}円でゲームクリア`;
-        const details = this.addText(x, 430, detailText, 20, '#457b9d').setOrigin(0.5);
+        const detailFontSize = item.kind === 'potion' ? 18 : 20;
+        const details = this.addText(x, 430, detailText, detailFontSize, '#457b9d').setOrigin(0.5);
         details.setAlign('center');
         this.registerShopObject(details, x);
       }
@@ -895,18 +1024,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   private useConfusionPotion(): void {
-    if (this.confusionPotionCount <= 0 || this.enemyConfused) {
+    if (this.confusionPotionCount <= 0 || this.enemyWeakened) {
       return;
     }
     this.confusionPotionCount -= 1;
-    this.enemyConfused = true;
+    this.enemyWeakened = true;
     this.playPotionEffect('confusion');
-    this.showFloatingText('敵が混乱した', '#cdb4db', 640);
+    this.showFloatingText('敵の攻撃力が半減', '#cdb4db', 640);
     this.updateHud();
   }
 
   private playPotionEffect(type: 'strength' | 'weakness' | 'health' | 'defense' | 'confusion'): void {
     const effect = this.addScreenObject(this.add.graphics());
+    effect.setDepth(EFFECT_DEPTH);
     const color = type === 'strength'
       ? 0xf4d35e
       : type === 'weakness' || type === 'confusion'
@@ -1140,7 +1270,7 @@ export class GameScene extends Phaser.Scene {
       color,
       stroke: '#264653',
       strokeThickness: 5,
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(EFFECT_DEPTH));
     this.tweens.add({
       targets: damageText,
       y: '-=55',
@@ -1207,10 +1337,6 @@ export class GameScene extends Phaser.Scene {
     if (this.mode !== 'playing' || !this.enemyAlive) {
       return;
     }
-    if (this.enemyConfused && Math.random() < 0.5) {
-      this.showFloatingText('攻撃 miss', '#cdb4db', 640);
-      return;
-    }
     this.playerHp = Math.max(0, this.playerHp - this.getEnemyAttackPower());
     this.cameras.main.flash(120, 230, 80, 80);
     this.tweens.add({
@@ -1218,7 +1344,7 @@ export class GameScene extends Phaser.Scene {
       x: '+=14',
       duration: 70,
       yoyo: true,
-      repeat: 2,
+      repeat: 1,
     });
     this.updateHud();
     if (this.playerHp === 0) {
@@ -1363,7 +1489,7 @@ export class GameScene extends Phaser.Scene {
     this.potionSlotPanels[2]?.setFillStyle(this.weaknessPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[3]?.setFillStyle(this.healthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[4]?.setFillStyle(this.defensePotionCount > 0 && !this.defensePotionActive ? 0xf8f9fa : 0xadb5bd);
-    this.potionSlotPanels[5]?.setFillStyle(this.confusionPotionCount > 0 && !this.enemyConfused ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[5]?.setFillStyle(this.confusionPotionCount > 0 && !this.enemyWeakened ? 0xf8f9fa : 0xadb5bd);
     this.updateSkillHud();
   }
 
@@ -1371,7 +1497,8 @@ export class GameScene extends Phaser.Scene {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
     const attackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
     const skillReduced = this.selectedSkillByBranch.includes(8) ? Math.max(1, Math.floor(attackPower * 0.9)) : attackPower;
-    return this.defensePotionActive ? Math.max(1, Math.floor(skillReduced / 2)) : skillReduced;
+    const potionReduced = this.enemyWeakened ? Math.max(1, Math.floor(skillReduced / 2)) : skillReduced;
+    return this.defensePotionActive ? Math.max(1, Math.floor(potionReduced / 2)) : potionReduced;
   }
 
   private getEnemyReward(): number {
@@ -1523,6 +1650,7 @@ export class GameScene extends Phaser.Scene {
     const axe = this.addScreenObject(this.add.graphics());
     axe.setPosition(x, y);
     axe.setScale(scale);
+    axe.setDepth(EFFECT_DEPTH);
     this.drawAxeShape(axe);
     return axe;
   }
@@ -1553,6 +1681,7 @@ export class GameScene extends Phaser.Scene {
 
   private playAttackEffect(): void {
     const slash = this.addScreenObject(this.add.graphics());
+    slash.setDepth(EFFECT_DEPTH);
     slash.lineStyle(10, 0xf4d35e, 1);
     slash.beginPath();
     slash.moveTo(500, 300);
@@ -1575,6 +1704,7 @@ export class GameScene extends Phaser.Scene {
     for (let index = 0; index < 3; index += 1) {
       const slash = this.addScreenObject(this.add.graphics());
       slash.setPosition(640, 370);
+      slash.setDepth(EFFECT_DEPTH);
       slash.lineStyle(12, 0xffadad, 1);
       slash.beginPath();
       slash.moveTo(-130, -80 + index * 55);
@@ -1605,6 +1735,7 @@ export class GameScene extends Phaser.Scene {
         this.removeScreenObject(axe);
         const impact = this.addScreenObject(this.add.graphics());
         impact.setPosition(640, 370);
+        impact.setDepth(EFFECT_DEPTH);
         impact.lineStyle(8, 0xf4d35e, 1);
         impact.strokeCircle(0, 0, 45);
         this.tweens.add({
@@ -1623,6 +1754,7 @@ export class GameScene extends Phaser.Scene {
     this.playSkillLabel('札束パンチ！', '#57cc99');
     for (let index = 0; index < 5; index += 1) {
       const bill = this.addScreenObject(this.add.rectangle(300, 370 + (index - 2) * 35, 90, 48, 0x57cc99));
+      bill.setDepth(EFFECT_DEPTH);
       bill.setStrokeStyle(4, 0x1b7f5a, 1);
       bill.setAngle(-15 + index * 8);
       this.tweens.add({
@@ -1642,6 +1774,7 @@ export class GameScene extends Phaser.Scene {
   private playHealEffect(recovery: number): void {
     const glow = this.addScreenObject(this.add.graphics());
     glow.setPosition(640, 390);
+    glow.setDepth(EFFECT_DEPTH);
     glow.fillStyle(0x57cc99, 0.25);
     glow.fillCircle(0, 0, 85);
     glow.lineStyle(8, 0x57cc99, 1);
@@ -1665,7 +1798,7 @@ export class GameScene extends Phaser.Scene {
       color,
       stroke: '#264653',
       strokeThickness: 6,
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(EFFECT_DEPTH));
     this.tweens.add({
       targets: skillLabel,
       y: '-=40',
@@ -1683,7 +1816,7 @@ export class GameScene extends Phaser.Scene {
       color: '#f4d35e',
       stroke: '#264653',
       strokeThickness: 6,
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(EFFECT_DEPTH));
     this.tweens.add({
       targets: levelLabel,
       y: '-=50',
@@ -1701,7 +1834,7 @@ export class GameScene extends Phaser.Scene {
       color: '#f4d35e',
       stroke: '#3d405b',
       strokeThickness: 6,
-    }).setOrigin(0.5));
+    }).setOrigin(0.5).setDepth(EFFECT_DEPTH));
     this.tweens.add({
       targets: this.enemyVisuals,
       scaleX: 1.35,
@@ -1758,7 +1891,7 @@ export class GameScene extends Phaser.Scene {
     const panel = this.addScreenObject(this.add.rectangle(640, 360, 1180, 650, 0xf8f9fa));
     panel.setStrokeStyle(5, 0x2a9d8f, 1);
     this.addText(640, 55, 'スキルツリー', 44, '#264653').setOrigin(0.5);
-    this.addText(640, 92, '3つの枝から各1個を選択。別のスキルを押せば変更できます。', 18, '#457b9d').setOrigin(0.5);
+    this.addText(640, 92, '各枝から1個を装備。未開放スキルはSP 1で開放できます。', 18, '#457b9d').setOrigin(0.5);
 
     const data = this.getSkillTreeData();
     const branchX = [250, 640, 1030];
@@ -1769,21 +1902,50 @@ export class GameScene extends Phaser.Scene {
     ];
 
     groups.forEach((group, branch) => {
-      this.addText(branchX[branch], 135, `枝 ${branch + 1}`, 24, '#2a9d8f').setOrigin(0.5);
+      this.addText(branchX[branch], 165, `枝 ${branch + 1}`, 24, '#2a9d8f').setOrigin(0.5);
       group.forEach((skill, index) => {
-        const y = 205 + index * 95;
+        const y = 230 + index * 90;
         const selected = this.selectedSkillByBranch[branch] === skill.id;
-        const button = this.addScreenObject(this.add.rectangle(branchX[branch], y, 300, 78, selected ? 0x2a9d8f : 0xffffff));
-        button.setStrokeStyle(3, selected ? 0xf4d35e : 0xd9e2ec, 1);
+        const unlocked = this.unlockedSkillIds.has(skill.id);
+        const button = this.addScreenObject(this.add.rectangle(
+          branchX[branch],
+          y,
+          300,
+          78,
+          selected ? 0x2a9d8f : unlocked ? 0xffffff : 0xe9ecef,
+        ));
+        button.setStrokeStyle(3, selected ? 0xf4d35e : unlocked ? 0xd9e2ec : 0xadb5bd, 1);
         button.setInteractive({ useHandCursor: true });
         button.on('pointerdown', () => this.selectSkillTreeSkill(skill.id));
         this.skillTreeObjects.push(button);
         const title = this.addText(branchX[branch], y - 17, skill.name, 21, selected ? '#ffffff' : '#264653').setOrigin(0.5);
-        const desc = this.addText(branchX[branch], y + 16, skill.description, 15, selected ? '#ffffff' : '#457b9d').setOrigin(0.5);
+        const detail = unlocked
+          ? skill.description
+          : this.skillPoints > 0 ? 'クリックして開放（SP 1）' : '未開放（レベルアップでSP獲得）';
+        const desc = this.addText(branchX[branch], y + 16, detail, 15, selected ? '#ffffff' : '#457b9d').setOrigin(0.5);
         this.skillTreeObjects.push(title, desc);
       });
     });
 
+    this.addText(640, 122, `未使用スキルポイント: ${this.skillPoints}　開放済みスキルは自由に切替可能`, 18, '#264653').setOrigin(0.5);
+    this.addText(640, 558, '技の開放（各SP 1）', 20, '#264653').setOrigin(0.5);
+    TECHNIQUE_NAMES.forEach((name, index) => {
+      const x = 190 + index * 300;
+      const unlocked = this.skillLevels[index] > 0;
+      const button = this.addScreenObject(this.add.rectangle(
+        x,
+        595,
+        260,
+        48,
+        unlocked ? 0x2a9d8f : this.skillPoints > 0 ? 0x457b9d : 0xadb5bd,
+      ));
+      button.setInteractive({ useHandCursor: !unlocked && this.skillPoints > 0 });
+      button.on('pointerdown', () => this.unlockTechnique(index));
+      this.skillTreeObjects.push(button);
+      const label = unlocked ? '開放済み' : this.skillPoints > 0 ? 'SP 1で開放' : 'SP不足';
+      const text = this.addText(x, 595, `${name}: ${label}`, 17, '#ffffff').setOrigin(0.5);
+      this.skillTreeObjects.push(text);
+    });
     const back = this.addScreenObject(this.add.rectangle(640, 645, 260, 50, 0x457b9d));
     back.setInteractive({ useHandCursor: true });
     back.on('pointerdown', () => this.returnFromSkillTree());
@@ -1801,9 +1963,28 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private unlockTechnique(techniqueIndex: number): void {
+    if (this.skillLevels[techniqueIndex] !== 0 || this.skillPoints <= 0) {
+      return;
+    }
+    this.skillPoints -= 1;
+    this.skillLevels[techniqueIndex] = 1;
+    this.showSkillTree(this.returnToPauseAfterSkillTree);
+  }
+
   private selectSkillTreeSkill(skillId: number): void {
     const skill = this.getSkillTreeData()[skillId];
-    if (!skill) return;
+    if (!skill) {
+      return;
+    }
+    if (!this.unlockedSkillIds.has(skillId)) {
+      if (this.skillPoints <= 0) {
+        this.showFloatingText('スキルポイント不足：レベルアップで獲得', '#e76f51', 640);
+        return;
+      }
+      this.skillPoints -= 1;
+      this.unlockedSkillIds.add(skillId);
+    }
     const previous = this.selectedSkillByBranch[skill.branch];
     const previousMaxHpBonus = this.getSelectedSkillMaxHpBonus();
     this.selectedSkillByBranch[skill.branch] = skillId;
@@ -1926,69 +2107,13 @@ export class GameScene extends Phaser.Scene {
     this.clearCombatants();
     if (this.enemyAlive) {
       const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
+      this.addEnemyDecoration(this.add.ellipse(640, 495, 205, 28, 0x264653, 0.35)).setDepth(1);
       if (variant.shape === 'slime') {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.ellipse(640, 390, 220, 190, this.isRareEnemy ? 0xf4d35e : variant.bodyColor)));
-        this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 370, 14, this.isRareEnemy ? 0xffd166 : variant.headColor)));
-        this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 370, 14, this.isRareEnemy ? 0xffd166 : variant.headColor)));
+        this.drawSlimeEnemy(variant);
       } else if (variant.shape === 'golem') {
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 410, 220, 210, this.isRareEnemy ? 0xf4d35e : variant.bodyColor)));
-        this.enemyVisuals.push(this.addEnemyVisual(this.add.rectangle(640, 270, 180, 100, this.isRareEnemy ? 0xffd166 : variant.headColor)));
-        this.enemyVisuals.push(this.addCombatObject(this.add.circle(610, 270, 12, 0x212529)));
-        this.enemyVisuals.push(this.addCombatObject(this.add.circle(670, 270, 12, 0x212529)));
+        this.drawGolemEnemy(variant);
       } else {
-        const goblinBody = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, this.isRareEnemy ? 0xf4d35e : variant.bodyColor));
-        const goblinHead = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, this.isRareEnemy ? 0xffd166 : variant.headColor));
-        const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, 530, 225, 565, 255, 595, 225, this.isRareEnemy ? 0xf4d35e : variant.bodyColor));
-        const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, 685, 225, 715, 255, 750, 225, this.isRareEnemy ? 0xf4d35e : variant.bodyColor));
-        const leftEarInner = this.addEnemyVisual(this.add.triangle(565, 267, 548, 240, 565, 252, 582, 240, 0xffadad));
-        const rightEarInner = this.addEnemyVisual(this.add.triangle(715, 267, 698, 240, 715, 252, 732, 240, 0xffadad));
-        const leftEye = this.addEnemyVisual(this.add.ellipse(610, 290, 34, 26, 0xf8f9fa));
-        const rightEye = this.addEnemyVisual(this.add.ellipse(670, 290, 34, 26, 0xf8f9fa));
-        const leftPupil = this.addEnemyVisual(this.add.circle(615, 292, 8, 0x212529));
-        const rightPupil = this.addEnemyVisual(this.add.circle(665, 292, 8, 0x212529));
-        const nose = this.addEnemyVisual(this.add.triangle(640, 305, 625, 330, 655, 330, 640, 290, 0xe9c46a));
-        const mouth = this.addEnemyVisual(this.add.rectangle(640, 355, 72, 24, 0x212529));
-        const toothLeft = this.addEnemyVisual(this.add.triangle(630, 356, 620, 350, 640, 350, 630, 365, 0xf8f9fa));
-        const toothRight = this.addEnemyVisual(this.add.triangle(650, 356, 640, 350, 660, 350, 650, 365, 0xf8f9fa));
-        const shoulderArmor = this.addEnemyVisual(this.add.rectangle(640, 385, 120, 36, 0x495057));
-        const belt = this.addEnemyVisual(this.add.rectangle(640, 450, 125, 18, 0x6d597a));
-        const beltBuckle = this.addEnemyVisual(this.add.rectangle(640, 450, 18, 18, 0xf4d35e));
-        goblinBody.setDepth(2);
-        leftEar.setDepth(3);
-        rightEar.setDepth(3);
-        leftEarInner.setDepth(4);
-        rightEarInner.setDepth(4);
-        goblinHead.setDepth(5);
-        shoulderArmor.setDepth(6);
-        belt.setDepth(6);
-        beltBuckle.setDepth(7);
-        leftEye.setDepth(8);
-        rightEye.setDepth(8);
-        leftPupil.setDepth(9);
-        rightPupil.setDepth(9);
-        nose.setDepth(9);
-        mouth.setDepth(9);
-        toothLeft.setDepth(10);
-        toothRight.setDepth(10);
-        this.enemyVisuals.push(
-          goblinBody,
-          goblinHead,
-          leftEar,
-          rightEar,
-          leftEarInner,
-          rightEarInner,
-          leftEye,
-          rightEye,
-          leftPupil,
-          rightPupil,
-          nose,
-          mouth,
-          toothLeft,
-          toothRight,
-          shoulderArmor,
-          belt,
-          beltBuckle,
-        );
+        this.drawGoblinEnemy(variant);
       }
       const enemyName = this.addText(640, 520, this.isRareEnemy ? `★ 金色${variant.name} ★` : variant.name, 26, this.isRareEnemy ? '#f4d35e' : '#ffffff').setOrigin(0.5);
       enemyName.setStroke('#264653', 4);
@@ -1998,6 +2123,217 @@ export class GameScene extends Phaser.Scene {
       respawnText.setStroke('#264653', 4);
       this.addCombatObject(respawnText);
     }
+  }
+
+  private drawSlimeEnemy(variant: (typeof ENEMY_VARIANTS)[number]): void {
+    const bodyColor = this.isRareEnemy ? 0xf4d35e : variant.bodyColor;
+    const accentColor = this.isRareEnemy ? 0xffd166 : variant.headColor;
+    if (variant.name === 'コウモリ') {
+      const wings = this.addEnemyDecoration(this.add.graphics());
+      wings.setPosition(640, 390);
+      wings.fillStyle(variant.bodyColor, 1);
+      wings.fillTriangle(-48, -20, -138, -92, -112, 54);
+      wings.fillTriangle(48, -20, 138, -92, 112, 54);
+      wings.lineStyle(5, 0x302943, 1);
+      wings.lineBetween(-48, -20, -112, 54);
+      wings.lineBetween(-48, -20, -138, -92);
+      wings.lineBetween(48, -20, 112, 54);
+      wings.lineBetween(48, -20, 138, -92);
+      wings.setDepth(2);
+    }
+
+    const body = this.addEnemyVisual(this.add.ellipse(640, 390, 220, 190, bodyColor));
+    body.setStrokeStyle(8, 0x264653, 0.85);
+    body.setDepth(3);
+    this.addEnemyDecoration(this.add.ellipse(600, 345, 64, 30, 0xffffff, 0.32)).setDepth(4);
+    this.addEnemyDecoration(this.add.ellipse(610, 373, 28, 34, 0xf8f9fa)).setDepth(5);
+    this.addEnemyDecoration(this.add.ellipse(670, 373, 28, 34, 0xf8f9fa)).setDepth(5);
+    this.addEnemyDecoration(this.add.circle(615, 376, 7, 0x212529)).setDepth(6);
+    this.addEnemyDecoration(this.add.circle(675, 376, 7, 0x212529)).setDepth(6);
+
+    const face = this.addEnemyDecoration(this.add.graphics());
+    face.setPosition(640, 390);
+    face.lineStyle(5, 0x264653, 1);
+    face.beginPath();
+    face.arc(0, 12, 20, 0.2, Math.PI - 0.2);
+    face.strokePath();
+    face.setDepth(6);
+
+    if (variant.name === 'マタンゴ') {
+      const cap = this.addEnemyDecoration(this.add.ellipse(640, 326, 168, 76, accentColor));
+      cap.setStrokeStyle(7, 0x59334d, 1);
+      cap.setDepth(7);
+      for (const [x, y] of [[590, 320], [640, 305], [690, 320], [640, 337]]) {
+        this.addEnemyDecoration(this.add.circle(x, y, 8, 0xffe7ef)).setDepth(8);
+      }
+    }
+  }
+
+  private drawGolemEnemy(variant: (typeof ENEMY_VARIANTS)[number]): void {
+    const bodyColor = this.isRareEnemy ? 0xf4d35e : variant.bodyColor;
+    const accentColor = this.isRareEnemy ? 0xffd166 : variant.headColor;
+    if (variant.name === 'ワイバーン' || variant.name === '古代竜') {
+      const wings = this.addEnemyDecoration(this.add.graphics());
+      wings.setPosition(640, 380);
+      wings.fillStyle(variant.name === '古代竜' ? 0x765126 : 0x245740, 1);
+      wings.fillTriangle(-55, -12, -185, -128, -135, 70);
+      wings.fillTriangle(55, -12, 185, -128, 135, 70);
+      wings.lineStyle(8, 0x264653, 1);
+      wings.lineBetween(-55, -12, -185, -128);
+      wings.lineBetween(-55, -12, -135, 70);
+      wings.lineBetween(55, -12, 185, -128);
+      wings.lineBetween(55, -12, 135, 70);
+      wings.setDepth(1);
+    }
+
+    const leftArm = this.addEnemyDecoration(this.add.rectangle(520, 390, 66, 150, bodyColor));
+    leftArm.setAngle(-14);
+    leftArm.setStrokeStyle(7, 0x264653, 1);
+    leftArm.setDepth(2);
+    const rightArm = this.addEnemyDecoration(this.add.rectangle(760, 390, 66, 150, bodyColor));
+    rightArm.setAngle(14);
+    rightArm.setStrokeStyle(7, 0x264653, 1);
+    rightArm.setDepth(2);
+    const torso = this.addEnemyVisual(this.add.rectangle(640, 410, 190, 190, bodyColor));
+    torso.setStrokeStyle(9, 0x264653, 1);
+    torso.setDepth(3);
+    const head = this.addEnemyVisual(this.add.rectangle(640, 275, 166, 112, accentColor));
+    head.setStrokeStyle(8, 0x264653, 1);
+    head.setDepth(4);
+    this.addEnemyDecoration(this.add.rectangle(640, 365, 102, 24, 0x495057)).setDepth(5);
+    this.addEnemyDecoration(this.add.circle(606, 275, 13, this.isRareEnemy ? 0x7a3100 : 0xff5448)).setDepth(6);
+    this.addEnemyDecoration(this.add.circle(674, 275, 13, this.isRareEnemy ? 0x7a3100 : 0xff5448)).setDepth(6);
+
+    const cracks = this.addEnemyDecoration(this.add.graphics());
+    cracks.setPosition(640, 410);
+    cracks.lineStyle(5, 0x26323c, 0.85);
+    cracks.lineBetween(-64, -62, -42, -31);
+    cracks.lineBetween(-42, -31, -58, -2);
+    cracks.lineBetween(58, -54, 36, -24);
+    cracks.lineBetween(36, -24, 56, 4);
+    cracks.lineBetween(-10, 30, 8, 58);
+    cracks.setDepth(6);
+
+    if (variant.name === 'アイスゴーレム') {
+      const crystals = this.addEnemyDecoration(this.add.graphics());
+      crystals.setPosition(640, 270);
+      crystals.fillStyle(0xd7f7ff, 1);
+      crystals.fillTriangle(-52, -45, -33, -104, -15, -45);
+      crystals.fillTriangle(-12, -48, 8, -120, 28, -48);
+      crystals.fillTriangle(29, -45, 51, -96, 68, -45);
+      crystals.lineStyle(4, 0x438da8, 1);
+      crystals.strokeTriangle(-52, -45, -33, -104, -15, -45);
+      crystals.strokeTriangle(-12, -48, 8, -120, 28, -48);
+      crystals.strokeTriangle(29, -45, 51, -96, 68, -45);
+      crystals.setDepth(5);
+    } else if (variant.name === '古代竜') {
+      const horns = this.addEnemyDecoration(this.add.graphics());
+      horns.setPosition(640, 275);
+      horns.fillStyle(0xf0d59b, 1);
+      horns.fillTriangle(-55, -38, -78, -92, -25, -48);
+      horns.fillTriangle(55, -38, 78, -92, 25, -48);
+      horns.setDepth(5);
+    }
+  }
+
+  private drawGoblinEnemy(variant: (typeof ENEMY_VARIANTS)[number]): void {
+    const bodyColor = this.isRareEnemy ? 0xf4d35e : variant.bodyColor;
+    const headColor = this.isRareEnemy ? 0xffd166 : variant.headColor;
+    if (variant.name === 'ヴァンパイア') {
+      const cape = this.addEnemyDecoration(this.add.graphics());
+      cape.setPosition(640, 390);
+      cape.fillStyle(0x561d33, 1);
+      cape.fillTriangle(-62, -25, -150, 128, 0, 88);
+      cape.fillTriangle(62, -25, 150, 128, 0, 88);
+      cape.lineStyle(5, 0x291522, 1);
+      cape.lineBetween(-62, -25, -150, 128);
+      cape.lineBetween(62, -25, 150, 128);
+      cape.setDepth(1);
+    }
+
+    const body = this.addEnemyVisual(this.add.ellipse(640, 405, 170, 205, bodyColor));
+    body.setStrokeStyle(8, 0x264653, 1);
+    body.setDepth(2);
+    const leftEar = this.addEnemyVisual(this.add.triangle(565, 285, -34, -60, 0, -24, 28, -58, bodyColor));
+    leftEar.setStrokeStyle(5, 0x264653, 1);
+    leftEar.setDepth(3);
+    const rightEar = this.addEnemyVisual(this.add.triangle(715, 285, -28, -58, 0, -24, 34, -60, bodyColor));
+    rightEar.setStrokeStyle(5, 0x264653, 1);
+    rightEar.setDepth(3);
+    const head = this.addEnemyVisual(this.add.ellipse(640, 295, 170, 145, headColor));
+    head.setStrokeStyle(8, 0x264653, 1);
+    head.setDepth(4);
+    this.addEnemyDecoration(this.add.ellipse(610, 267, 44, 9, 0xffffff, 0.25)).setDepth(5);
+
+    const eyes = this.addEnemyDecoration(this.add.graphics());
+    eyes.setPosition(640, 295);
+    eyes.fillStyle(0xf8f9fa, 1);
+    eyes.fillEllipse(-30, -3, 38, 28);
+    eyes.fillEllipse(30, -3, 38, 28);
+    eyes.fillStyle(this.isRareEnemy ? 0x7a3100 : 0x212529, 1);
+    eyes.fillCircle(-25, -2, 8);
+    eyes.fillCircle(25, -2, 8);
+    eyes.setDepth(6);
+    this.addEnemyDecoration(this.add.ellipse(640, 356, 70, 24, 0x212529)).setDepth(6);
+
+    const details = this.addEnemyDecoration(this.add.graphics());
+    details.setPosition(640, 390);
+    details.fillStyle(0x495057, 1);
+    details.fillRoundedRect(-66, -5, 132, 38, 8);
+    details.lineStyle(4, 0x26323c, 1);
+    details.lineBetween(-75, -13, -48, -25);
+    details.lineBetween(-45, -25, -18, -13);
+    details.lineBetween(-15, -13, 12, -25);
+    details.lineBetween(15, -25, 42, -13);
+    details.lineBetween(45, -13, 72, -25);
+    details.fillStyle(0xf4d35e, 1);
+    details.fillRect(-10, 2, 20, 22);
+    details.setDepth(7);
+
+    if (variant.name === '魔女') {
+      const hat = this.addEnemyDecoration(this.add.graphics());
+      hat.setPosition(640, 246);
+      hat.fillStyle(0x33233f, 1);
+      hat.fillTriangle(-84, -7, 0, -113, 84, -7);
+      hat.fillStyle(0xf4d35e, 1);
+      hat.fillRoundedRect(-92, -12, 184, 18, 8);
+      hat.fillCircle(0, -28, 12);
+      hat.setDepth(8);
+    } else if (variant.name === 'デーモン') {
+      const horns = this.addEnemyDecoration(this.add.graphics());
+      horns.setPosition(640, 258);
+      horns.fillStyle(0xe8d6ba, 1);
+      horns.fillTriangle(-48, -24, -80, -94, -16, -38);
+      horns.fillTriangle(48, -24, 80, -94, 16, -38);
+      horns.setDepth(8);
+    } else if (variant.name === 'スケルトン') {
+      const ribs = this.addEnemyDecoration(this.add.graphics());
+      ribs.setPosition(640, 390);
+      ribs.lineStyle(6, 0xf0e8d5, 1);
+      for (let y = 5; y <= 53; y += 16) {
+        ribs.beginPath();
+        ribs.arc(0, y, 48, Math.PI, Math.PI * 2);
+        ribs.strokePath();
+      }
+      ribs.lineBetween(0, -5, 0, 67);
+      ribs.setDepth(8);
+    } else if (variant.name === 'ウェアウルフ') {
+      const muzzle = this.addEnemyDecoration(this.add.ellipse(640, 324, 82, 42, 0x3f3029));
+      muzzle.setStrokeStyle(4, 0x264653, 1);
+      muzzle.setDepth(7);
+    } else if (variant.name === 'ヴァンパイア') {
+      const fangs = this.addEnemyDecoration(this.add.graphics());
+      fangs.setPosition(640, 350);
+      fangs.fillStyle(0xf8f9fa, 1);
+      fangs.fillTriangle(-25, -2, -14, 25, -4, -2);
+      fangs.fillTriangle(25, -2, 14, 25, 4, -2);
+      fangs.setDepth(8);
+    }
+  }
+
+  private addEnemyDecoration<T extends Phaser.GameObjects.GameObject>(object: T): T {
+    this.enemyVisuals.push(object);
+    return this.addCombatObject(object);
   }
 
   private chooseNextEnemyVariant(): void {
@@ -2017,6 +2353,7 @@ export class GameScene extends Phaser.Scene {
   private addEnemyVisual<T extends Phaser.GameObjects.Shape>(object: T): T {
     object.setInteractive({ useHandCursor: true });
     object.on('pointerdown', () => this.attack(0));
+    this.enemyVisuals.push(object);
     return this.addCombatObject(object);
   }
 
@@ -2038,6 +2375,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private resumeTimers(): void {
+    this.tweens.resumeAll();
     if (this.enemyAttackTimer) {
       this.enemyAttackTimer.paused = false;
     }
@@ -2056,6 +2394,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private pauseTimers(): void {
+    this.tweens.pauseAll();
     if (this.enemyAttackTimer) {
       this.enemyAttackTimer.paused = true;
     }
@@ -2130,6 +2469,42 @@ export class GameScene extends Phaser.Scene {
     this.confusionPotionCountText = undefined;
     this.potionSlotPanels = [];
     this.skillTreeObjects = [];
+    this.debugPanel = undefined;
+    this.debugText = undefined;
+  }
+
+  private updateDebugOverlay(): void {
+    if (!this.debugMode) {
+      if (this.debugPanel) this.removeScreenObject(this.debugPanel);
+      if (this.debugText) this.removeScreenObject(this.debugText);
+      this.debugPanel = undefined;
+      this.debugText = undefined;
+      return;
+    }
+
+    if (!this.debugPanel || !this.debugText) {
+      this.debugPanel = this.addScreenObject(this.add.rectangle(880, 205, 390, 220, 0x0b1118, 0.94));
+      this.debugPanel.setOrigin(0, 0);
+      this.debugPanel.setDepth(2000);
+      this.debugText = this.addScreenObject(this.add.text(895, 220, '', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#d9e2ec',
+      }));
+      this.debugText.setDepth(2001);
+    }
+
+    const enemy = ENEMY_VARIANTS[this.enemyVariantIndex];
+    this.debugText.setText([
+      `DEBUG  ${this.mode}`,
+      `Player HP: ${this.playerHp} / ${this.playerMaxHp}`,
+      `Enemy: ${this.isRareEnemy ? 'Rare ' : ''}${enemy.name}`,
+      `Enemy HP: ${this.enemyHp} / ${this.enemyMaxHp}  alive=${this.enemyAlive}`,
+      `Enemy attack/reward: ${this.getEnemyAttackPower()} / ${this.getEnemyReward()}`,
+      `Defeated: ${this.defeatedCount}  Money: ${this.money}`,
+      `Weapon: ${WEAPONS[this.weaponIndex].name}`,
+      `Skills: ${this.getSelectedSkillNames()}`,
+    ]);
   }
 
   private addText(x: number, y: number, text: string, fontSize: number, color: string): Phaser.GameObjects.Text {
