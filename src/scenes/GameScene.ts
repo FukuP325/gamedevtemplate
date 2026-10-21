@@ -919,7 +919,6 @@ export class GameScene extends Phaser.Scene {
     const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * (SKILL_DAMAGE_MULTIPLIER + (this.skillLevels[1] - 1) * 0.5));
     this.applyDamage(attackDamage, '#f4d35e');
     this.applyWeaponEffects(false, attackDamage);
-    this.consumeWeaponDurability();
   }
 
   private useMoneyPunchSkill(): void {
@@ -934,7 +933,6 @@ export class GameScene extends Phaser.Scene {
         const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * (7 + (this.skillLevels[2] - 1)));
         this.applyDamage(attackDamage, '#57cc99');
         this.applyWeaponEffects(false, attackDamage);
-        this.consumeWeaponDurability();
       }
     });
   }
@@ -1019,7 +1017,7 @@ export class GameScene extends Phaser.Scene {
     this.defensePotionCount -= 1;
     this.defensePotionActive = true;
     this.playPotionEffect('defense');
-    this.showFloatingText('敵の攻撃力 1/2', '#457b9d', 1230);
+    this.showFloatingText('受けるダメージ 1/2', '#457b9d', 1230);
     this.updateHud();
   }
 
@@ -1174,10 +1172,10 @@ export class GameScene extends Phaser.Scene {
     if (this.damageOverTimeTimer || !this.enemyAlive) {
       return;
     }
-    this.damageOverTimeTicksRemaining = 10;
+    this.damageOverTimeTicksRemaining = 2;
     this.damageOverTimeTimer = this.time.addEvent({
       delay: 1000,
-      repeat: 9,
+      repeat: 1,
       callback: () => {
         if (this.mode === 'playing' && this.enemyAlive) {
           this.applyDamage(damage, '#e76f51');
@@ -1246,7 +1244,6 @@ export class GameScene extends Phaser.Scene {
     const attackDamage = this.getAttackDamage(this.getPlayerAttackPower() * 5);
     this.applyDamage(attackDamage, '#ffadad');
     this.applyWeaponEffects(false, attackDamage);
-    this.consumeWeaponDurability();
   }
 
   private applyDamage(amount: number, color: string): void {
@@ -1337,7 +1334,9 @@ export class GameScene extends Phaser.Scene {
     if (this.mode !== 'playing' || !this.enemyAlive) {
       return;
     }
-    this.playerHp = Math.max(0, this.playerHp - this.getEnemyAttackPower());
+    const incomingDamage = this.getEnemyAttackPower();
+    const damage = this.defensePotionActive ? Math.max(1, Math.floor(incomingDamage / 2)) : incomingDamage;
+    this.playerHp = Math.max(0, this.playerHp - damage);
     this.cameras.main.flash(120, 230, 80, 80);
     this.tweens.add({
       targets: this.enemyVisuals,
@@ -1497,8 +1496,7 @@ export class GameScene extends Phaser.Scene {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
     const attackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
     const skillReduced = this.selectedSkillByBranch.includes(8) ? Math.max(1, Math.floor(attackPower * 0.9)) : attackPower;
-    const potionReduced = this.enemyWeakened ? Math.max(1, Math.floor(skillReduced / 2)) : skillReduced;
-    return this.defensePotionActive ? Math.max(1, Math.floor(potionReduced / 2)) : potionReduced;
+    return this.enemyWeakened ? Math.max(1, Math.floor(skillReduced / 2)) : skillReduced;
   }
 
   private getEnemyReward(): number {
@@ -1664,6 +1662,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const pausedDuration = this.time.now - this.pausedAt;
+    this.lastAttackAt += pausedDuration;
     this.lastSkillAt += pausedDuration;
     this.lastMoneyPunchAt += pausedDuration;
     this.lastHealSkillAt += pausedDuration;
