@@ -15,6 +15,7 @@ import {
   HEAL_SKILL_COOLDOWN,
   GAME_WIDTH,
   KILLS_PER_LEVEL,
+  MAX_MONEY,
   MONEY_PUNCH_COOLDOWN,
   PLAYER_ATTACK_INTERVAL,
   PLAYER_MAX_HP,
@@ -30,11 +31,63 @@ import {
   WEAPONS,
 } from '../game/constants';
 
-type GameMode = 'title' | 'playing' | 'paused' | 'enemyBook' | 'skillTree' | 'shop' | 'gameOver' | 'clear';
+type GameMode = 'title' | 'playing' | 'paused' | 'enemyBook' | 'skillTree' | 'shop' | 'gacha' | 'titles' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment' | 'potion';
+type GachaItem =
+  | { kind: 'weapon'; itemIndex: number; name: string; attackPower: number; durability: number | null; price: number; gachaOnly?: boolean; gachaEffect?: 'critical' | 'vampiric' | 'execute' }
+  | { kind: 'equipment'; itemIndex: number; name: string; hpBonus: number; price: number; gachaOnly?: boolean; damageReduction?: number }
+  | { kind: 'potion'; itemIndex: number; name: string; effect: string; price: number; gachaOnly?: boolean };
+type ShopItem = GachaItem | { kind: 'ticket'; itemIndex: number; name: string; attackPower: number; price: number };
+
+const POTION_SHOP_ITEMS = [
+  { name: '回復ポーション', effect: 'HPを全回復', price: POTION_PRICE },
+  { name: '力のポーション', effect: '攻撃力をだんだん上げる', price: STRENGTH_POTION_PRICE },
+  { name: '弱体化ポーション', effect: '敵のHPを下げる', price: WEAKNESS_POTION_PRICE },
+  { name: '体力のポーション', effect: 'HPを1.5倍にする（5分）', price: HEALTH_POTION_PRICE },
+  { name: '守りのポーション', effect: '防御力を上げる', price: DEFENSE_POTION_PRICE },
+  { name: '混乱のポーション', effect: '敵の攻撃力を半減', price: CONFUSION_POTION_PRICE },
+] as const;
+
+const GACHA_ONLY_POTIONS = [
+  { name: '星詠みの霊薬', effect: '次の3回攻撃が2.5倍', price: 3000, gachaOnly: true },
+  { name: '不死鳥の霊薬', effect: 'HP全回復、敵HPの35%ダメージ', price: 5000, gachaOnly: true },
+] as const;
+
+const POTION_GACHA_ITEMS = [...POTION_SHOP_ITEMS, ...GACHA_ONLY_POTIONS] as const;
+
+const GACHA_PRICES: Record<ShopCategory, number> = {
+  weapon: 500,
+  equipment: 500,
+  potion: 500,
+};
 
 const EFFECT_DEPTH = 20;
 const TECHNIQUE_NAMES = ['連撃', '金の一撃', '札束パンチ', '回復'];
+const PLAYER_TITLES = [
+  { id: 'apprentice', name: '見習い冒険者', condition: '最初から所持' },
+  { id: 'first_blood', name: '初陣の剣士', condition: '敵を1体倒す' },
+  { id: 'monster_hunter', name: '百鬼狩り', condition: '敵を50体倒す' },
+  { id: 'golden_hand', name: '黄金の手', condition: '累計1万円を獲得' },
+  { id: 'gold_saver', name: '金貨の貯蓄家', condition: '累計10万円を獲得' },
+  { id: 'gold_trader', name: '黄金商人', condition: '累計100万円を獲得' },
+  { id: 'gold_tycoon', name: '大富豪', condition: '累計1,000万円を獲得' },
+  { id: 'millionaire', name: '億万長者', condition: '累計1億円を獲得' },
+  { id: 'billionaire', name: '十億の覇者', condition: '累計10億円を獲得' },
+  { id: 'money_limit', name: '所持金カンスト', condition: '所持金を上限まで貯める' },
+  { id: 'collector', name: '限定蒐集家', condition: 'ガチャ限定品を獲得' },
+  { id: 'abyss_entry', name: '深淵の来訪者', condition: '深淵の第1戦に到達' },
+  { id: 'abyss_walker', name: '深淵の踏破者', condition: '深淵の第5戦に到達' },
+  { id: 'abyss_veteran', name: '深淵の熟練者', condition: '深淵の第10戦に到達' },
+  { id: 'abyss_legend', name: '深淵の覇者', condition: '深淵の第20戦に到達' },
+  { id: 'abyss_conqueror', name: '奈落の征服者', condition: '深淵の第30戦に到達' },
+  { id: 'abyss_immortal', name: '深淵の不滅者', condition: '深淵の第50戦に到達' },
+  { id: 'abyss_eternal', name: '永劫の挑戦者', condition: '深淵の第100戦に到達' },
+  { id: 'first_boss', name: '竜狩り', condition: '深淵ボスを1体倒す' },
+  { id: 'boss_hunter', name: '竜殺し', condition: '深淵ボスを5体倒す' },
+  { id: 'boss_legend', name: '竜王の天敵', condition: '深淵ボスを20体倒す' },
+  { id: 'golden_king', name: '黄金王', condition: '脱出チケットを購入' },
+] as const;
+type PlayerTitleId = (typeof PLAYER_TITLES)[number]['id'];
 
 export class GameScene extends Phaser.Scene {
   private mode: GameMode = 'title';
@@ -45,6 +98,14 @@ export class GameScene extends Phaser.Scene {
   private unlockedSkillIds = new Set<number>();
   private skillLevels = [1, 0, 0, 0];
   private defeatedCount = 0;
+  private totalMoneyEarned = 0;
+  private unlockedTitleIds = new Set<PlayerTitleId>(['apprentice']);
+  private selectedTitleId: PlayerTitleId = 'apprentice';
+  private titlePage = 0;
+  private endgameMode = false;
+  private endgameWave = 0;
+  private bestEndgameWave = 0;
+  private endgameBossesDefeated = 0;
   private enemyMaxHp = ENEMY_MAX_HP;
   private enemyHp = ENEMY_MAX_HP;
   private enemyVariantIndex = 0;
@@ -59,6 +120,9 @@ export class GameScene extends Phaser.Scene {
   private defensePotionCount = 1;
   private defensePotionActive = false;
   private confusionPotionCount = 1;
+  private starElixirCount = 0;
+  private phoenixElixirCount = 0;
+  private starElixirAttacksRemaining = 0;
   private enemyWeakened = false;
   private strengthPotionAttacksRemaining = 0;
   private vampiricAttackCount = 0;
@@ -89,10 +153,14 @@ export class GameScene extends Phaser.Scene {
   private eightKey!: Phaser.Input.Keyboard.Key;
   private nineKey!: Phaser.Input.Keyboard.Key;
   private zeroKey!: Phaser.Input.Keyboard.Key;
+  private qKey!: Phaser.Input.Keyboard.Key;
+  private wKey!: Phaser.Input.Keyboard.Key;
+  private yKey!: Phaser.Input.Keyboard.Key;
   private tKey!: Phaser.Input.Keyboard.Key;
   private leftKey!: Phaser.Input.Keyboard.Key;
   private rightKey!: Phaser.Input.Keyboard.Key;
   private eKey!: Phaser.Input.Keyboard.Key;
+  private gKey!: Phaser.Input.Keyboard.Key;
   private enemyAttackTimer?: Phaser.Time.TimerEvent;
   private respawnTimer?: Phaser.Time.TimerEvent;
   private screenObjects: Phaser.GameObjects.GameObject[] = [];
@@ -112,6 +180,8 @@ export class GameScene extends Phaser.Scene {
   private healthPotionCountText?: Phaser.GameObjects.Text;
   private defensePotionCountText?: Phaser.GameObjects.Text;
   private confusionPotionCountText?: Phaser.GameObjects.Text;
+  private starElixirCountText?: Phaser.GameObjects.Text;
+  private phoenixElixirCountText?: Phaser.GameObjects.Text;
   private weaponBreakDialogObjects: Phaser.GameObjects.GameObject[] = [];
   private weaponBreakDialogTimer?: Phaser.Time.TimerEvent;
   private potionSlotPanels: Phaser.GameObjects.Rectangle[] = [];
@@ -125,10 +195,15 @@ export class GameScene extends Phaser.Scene {
   private returnToPauseAfterShop = false;
   private returnToPauseAfterSkillTree = false;
   private returnToPauseAfterEnemyBook = false;
+  private returnToPauseAfterGacha = false;
+  private returnToShopAfterGacha = false;
+  private gachaReturnShopCategory: ShopCategory = 'weapon';
   private debugMode = false;
   private debugPanel?: Phaser.GameObjects.Rectangle;
   private debugText?: Phaser.GameObjects.Text;
   private pausedAt?: number;
+  private shopMessage?: string;
+  private gachaMessage?: string;
   private pendingPurchase?: { itemIndex: number; itemKind: 'weapon' | 'equipment' | 'potion' | 'ticket' };
   private playerHpBar?: Phaser.GameObjects.Rectangle;
   private enemyHpBar?: Phaser.GameObjects.Rectangle;
@@ -147,6 +222,10 @@ export class GameScene extends Phaser.Scene {
       this.returnFromSkillTree();
     } else if (this.mode === 'shop') {
       this.returnFromShop();
+    } else if (this.mode === 'gacha') {
+      this.returnFromGacha();
+    } else if (this.mode === 'titles') {
+      this.returnFromTitles();
     } else if (this.mode === 'gameOver' || this.mode === 'clear') {
       this.resetGame();
       this.showTitle();
@@ -186,11 +265,15 @@ export class GameScene extends Phaser.Scene {
     this.eightKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.EIGHT);
     this.nineKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.NINE);
     this.zeroKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ZERO);
+    this.qKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
+    this.wKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
+    this.yKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Y);
     this.tKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.T);
     this.leftKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
     this.rightKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
     this.eKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
-    keyboard.addCapture(['SPACE', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'ZERO', 'E', 'ESC', 'LEFT', 'RIGHT']);
+    this.gKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
+    keyboard.addCapture(['SPACE', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'ZERO', 'Q', 'W', 'Y', 'E', 'G', 'ESC', 'LEFT', 'RIGHT']);
     window.addEventListener('keydown', this.escapeListener);
     window.addEventListener('keydown', this.debugListener);
     this.events.once('shutdown', () => {
@@ -210,8 +293,12 @@ export class GameScene extends Phaser.Scene {
 
     if (this.mode === 'gameOver' || this.mode === 'clear') {
       if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
-        this.resetGame();
-        this.showPlaying();
+        if (this.mode === 'gameOver' && this.endgameMode) {
+          this.startEndgame();
+        } else {
+          this.resetGame();
+          this.showPlaying();
+        }
         return;
       }
     }
@@ -223,6 +310,14 @@ export class GameScene extends Phaser.Scene {
     if (this.mode === 'playing') {
       if (Phaser.Input.Keyboard.JustDown(this.eKey)) {
         this.showShop();
+        return;
+      }
+      if (Phaser.Input.Keyboard.JustDown(this.gKey)) {
+        this.showGacha();
+        return;
+      }
+      if (Phaser.Input.Keyboard.JustDown(this.yKey)) {
+        this.showTitles();
         return;
       }
       if (Phaser.Input.Keyboard.JustDown(this.tKey)) {
@@ -259,6 +354,12 @@ export class GameScene extends Phaser.Scene {
       if (Phaser.Input.Keyboard.JustDown(this.zeroKey)) {
         this.useConfusionPotion();
       }
+      if (Phaser.Input.Keyboard.JustDown(this.qKey)) {
+        this.useStarElixir();
+      }
+      if (Phaser.Input.Keyboard.JustDown(this.wKey)) {
+        this.usePhoenixElixir();
+      }
       this.updateSkillHud();
     } else if (this.mode === 'shop') {
       if (Phaser.Input.Keyboard.JustDown(this.tKey)) {
@@ -278,11 +379,16 @@ export class GameScene extends Phaser.Scene {
     this.returnToPauseAfterShop = false;
     this.returnToPauseAfterSkillTree = false;
     this.returnToPauseAfterEnemyBook = false;
+    this.returnToPauseAfterGacha = false;
+    this.returnToShopAfterGacha = false;
     this.level = 1;
     this.skillPoints = 0;
     this.unlockedSkillIds.clear();
     this.skillLevels = [1, 0, 0, 0];
     this.defeatedCount = 0;
+    this.totalMoneyEarned = 0;
+    this.endgameMode = false;
+    this.endgameWave = 0;
     this.enemyMaxHp = ENEMY_MAX_HP;
     this.enemyHp = this.enemyMaxHp;
     this.enemyVariantIndex = 0;
@@ -300,6 +406,9 @@ export class GameScene extends Phaser.Scene {
     this.defensePotionCount = 1;
     this.defensePotionActive = false;
     this.confusionPotionCount = 1;
+    this.starElixirCount = 0;
+    this.phoenixElixirCount = 0;
+    this.starElixirAttacksRemaining = 0;
     this.enemyWeakened = false;
     this.strengthPotionAttacksRemaining = 0;
     this.vampiricAttackCount = 0;
@@ -314,6 +423,7 @@ export class GameScene extends Phaser.Scene {
     this.weaponDurability.set(1, WEAPONS[1].durability);
     this.purchasedWeapons.add(1);
     this.purchasedEquipments.clear();
+    this.gachaMessage = undefined;
     this.enemyAlive = true;
     this.lastAttackAt = -PLAYER_ATTACK_INTERVAL;
   }
@@ -341,8 +451,10 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
     this.addPotionSlot();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'Esc: メニュー    E: ショップ    T: スキルツリー    ポーション: 5〜0', 21, '#ffffff').setOrigin(0.5);
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'Esc:メニュー E:ショップ G:ガチャ Y:称号 T:スキル 5〜0:薬 Q/W:限定薬', 20, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
+    const titleLabel = this.addText(GAME_WIDTH / 2, 25, `称号  /  ${this.getPlayerTitleName(this.selectedTitleId)}`, 18, '#f4d35e').setOrigin(0.5);
+    titleLabel.setStroke('#264653', 4);
     this.startEnemyAttackTimer();
   }
 
@@ -400,6 +512,19 @@ export class GameScene extends Phaser.Scene {
       color: '#ffffff',
     }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(enemyBookButtonText);
+    const gachaButton = this.addScreenObject(this.add.rectangle(640, 645, 320, 64, 0xe76f51).setDepth(1001));
+    gachaButton.setInteractive({ useHandCursor: true });
+    gachaButton.on('pointerdown', () => {
+      this.returnToPauseAfterGacha = true;
+      this.showGacha();
+    });
+    this.pauseOverlayObjects.push(gachaButton);
+    const gachaButtonText = this.addScreenObject(this.add.text(640, 645, 'ガチャへ', {
+      fontFamily: 'sans-serif',
+      fontSize: '24px',
+      color: '#ffffff',
+    }).setOrigin(0.5).setDepth(1001));
+    this.pauseOverlayObjects.push(gachaButtonText);
   }
 
   private showEnemyBook(returnToPause = false): void {
@@ -615,6 +740,133 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private returnFromGacha(): void {
+    const shouldReturnToPause = this.returnToPauseAfterGacha;
+    const shouldReturnToShop = this.returnToShopAfterGacha;
+    const returnShopCategory = this.gachaReturnShopCategory;
+    this.returnToPauseAfterGacha = false;
+    this.returnToShopAfterGacha = false;
+    if (shouldReturnToShop) {
+      this.showShop(returnShopCategory);
+      return;
+    }
+    if (shouldReturnToPause) {
+      this.applyPausedDuration();
+    }
+    this.showPlaying();
+    if (shouldReturnToPause) {
+      this.showPause();
+    }
+  }
+
+  private showTitles(): void {
+    if (this.mode === 'playing') {
+      this.pausedAt = this.time.now;
+    }
+    this.mode = 'titles';
+    this.pauseTimers();
+    this.clearScreen();
+    this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x101820));
+    this.addText(640, 52, '称号図鑑', 42, '#f4d35e').setOrigin(0.5);
+    this.addText(640, 93, `装備中  /  ${this.getPlayerTitleName(this.selectedTitleId)}`, 20, '#f8f9fa').setOrigin(0.5);
+    this.addText(265, 145, '称号', 16, '#57cc99');
+    this.addText(690, 145, '獲得条件', 16, '#57cc99');
+
+    const titlesPerPage = 8;
+    const pageCount = Math.ceil(PLAYER_TITLES.length / titlesPerPage);
+    this.titlePage = Phaser.Math.Clamp(this.titlePage, 0, pageCount - 1);
+    const visibleTitles = PLAYER_TITLES.slice(this.titlePage * titlesPerPage, (this.titlePage + 1) * titlesPerPage);
+    visibleTitles.forEach((title, index) => {
+      const y = 184 + index * 54;
+      const unlocked = this.unlockedTitleIds.has(title.id);
+      const selected = this.selectedTitleId === title.id;
+      const row = this.addScreenObject(this.add.rectangle(640, y, 900, 46, selected ? 0x264653 : unlocked ? 0x1d3039 : 0x18232d));
+      row.setStrokeStyle(2, selected ? 0xf4d35e : unlocked ? 0x57cc99 : 0x53616f, 1);
+      if (unlocked) {
+        row.setInteractive({ useHandCursor: true });
+        row.on('pointerdown', () => {
+          this.selectedTitleId = title.id;
+          this.showTitles();
+        });
+      }
+      this.addText(230, y, unlocked ? title.name : '？？？？', 20, unlocked ? '#f8f9fa' : '#7f8c98').setOrigin(0, 0.5);
+      this.addText(690, y, title.condition, 16, unlocked ? '#adb5bd' : '#667783').setOrigin(0, 0.5);
+      this.addText(1060, y, selected ? '装備中' : unlocked ? '装備する' : '未獲得', 15, selected ? '#f4d35e' : unlocked ? '#57cc99' : '#667783').setOrigin(1, 0.5);
+    });
+
+    this.addText(640, 615, `${this.titlePage + 1} / ${pageCount}`, 17, '#adb5bd').setOrigin(0.5);
+    if (this.titlePage > 0) {
+      const previousButton = this.addScreenObject(this.add.rectangle(535, 615, 110, 38, 0x263746));
+      previousButton.setInteractive({ useHandCursor: true });
+      previousButton.on('pointerdown', () => {
+        this.titlePage -= 1;
+        this.showTitles();
+      });
+      this.addText(535, 615, '前へ', 16, '#ffffff').setOrigin(0.5);
+    }
+    if (this.titlePage < pageCount - 1) {
+      const nextButton = this.addScreenObject(this.add.rectangle(745, 615, 110, 38, 0x263746));
+      nextButton.setInteractive({ useHandCursor: true });
+      nextButton.on('pointerdown', () => {
+        this.titlePage += 1;
+        this.showTitles();
+      });
+      this.addText(745, 615, '次へ', 16, '#ffffff').setOrigin(0.5);
+    }
+
+    const backButton = this.addScreenObject(this.add.rectangle(640, 660, 220, 48, 0x457b9d));
+    backButton.setInteractive({ useHandCursor: true });
+    backButton.on('pointerdown', () => this.returnFromTitles());
+    this.addText(640, 660, '戻る  /  ESC', 19, '#ffffff').setOrigin(0.5);
+  }
+
+  private returnFromTitles(): void {
+    this.applyPausedDuration();
+    this.showPlaying();
+  }
+
+  private getPlayerTitleName(titleId: PlayerTitleId): string {
+    return PLAYER_TITLES.find((title) => title.id === titleId)?.name ?? PLAYER_TITLES[0].name;
+  }
+
+  private unlockPlayerTitle(titleId: PlayerTitleId): void {
+    if (this.unlockedTitleIds.has(titleId)) {
+      return;
+    }
+    this.unlockedTitleIds.add(titleId);
+    if (this.mode === 'playing') {
+      this.showFloatingText(`称号獲得  /  ${this.getPlayerTitleName(titleId)}`, '#f4d35e', 640);
+    }
+  }
+
+  private checkPlayerTitleUnlocks(): void {
+    if (this.defeatedCount >= 1) this.unlockPlayerTitle('first_blood');
+    if (this.defeatedCount >= 50) this.unlockPlayerTitle('monster_hunter');
+    if (this.totalMoneyEarned >= 10000) this.unlockPlayerTitle('golden_hand');
+    if (this.totalMoneyEarned >= 100000) this.unlockPlayerTitle('gold_saver');
+    if (this.totalMoneyEarned >= 1000000) this.unlockPlayerTitle('gold_trader');
+    if (this.totalMoneyEarned >= 10000000) this.unlockPlayerTitle('gold_tycoon');
+    if (this.totalMoneyEarned >= 100000000) this.unlockPlayerTitle('millionaire');
+    if (this.totalMoneyEarned >= 1000000000) this.unlockPlayerTitle('billionaire');
+    if (this.bestEndgameWave >= 1) this.unlockPlayerTitle('abyss_entry');
+    if (this.bestEndgameWave >= 5) this.unlockPlayerTitle('abyss_walker');
+    if (this.bestEndgameWave >= 10) this.unlockPlayerTitle('abyss_veteran');
+    if (this.bestEndgameWave >= 20) this.unlockPlayerTitle('abyss_legend');
+    if (this.bestEndgameWave >= 30) this.unlockPlayerTitle('abyss_conqueror');
+    if (this.bestEndgameWave >= 50) this.unlockPlayerTitle('abyss_immortal');
+    if (this.bestEndgameWave >= 100) this.unlockPlayerTitle('abyss_eternal');
+    if (this.endgameBossesDefeated >= 1) this.unlockPlayerTitle('first_boss');
+    if (this.endgameBossesDefeated >= 5) this.unlockPlayerTitle('boss_hunter');
+    if (this.endgameBossesDefeated >= 20) this.unlockPlayerTitle('boss_legend');
+  }
+
+  private addMoney(amount: number): void {
+    this.money = Math.min(MAX_MONEY, this.money + amount);
+    if (this.money >= MAX_MONEY) {
+      this.unlockPlayerTitle('money_limit');
+    }
+  }
+
   private showShop(category: ShopCategory = this.shopCategory): void {
     this.mode = 'shop';
     this.shopCategory = category;
@@ -637,21 +889,24 @@ export class GameScene extends Phaser.Scene {
     potionTab.on('pointerdown', () => this.showShop('potion'));
     this.addText(1060, 135, 'ポーションショップ', 22, '#ffffff').setOrigin(0.5);
 
-    const items = category === 'weapon'
+    if (this.shopMessage) {
+      this.addText(GAME_WIDTH / 2, 178, this.shopMessage, 18, '#57cc99').setOrigin(0.5);
+      this.shopMessage = undefined;
+    }
+
+    const items: ShopItem[] = category === 'weapon'
       ? [
-        ...WEAPONS.slice(1).map((item) => ({ ...item, kind: 'weapon' as const })),
-        { name: '脱出チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket' as const },
+        ...WEAPONS.slice(1)
+          .map((item, index): GachaItem => ({ ...item, kind: 'weapon', itemIndex: index + 1 }))
+          .filter((item) => !WEAPONS[item.itemIndex].gachaOnly),
+        { name: '脱出チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket', itemIndex: -1 },
+        { name: '深淵の連戦チケット', attackPower: 0, price: CLEAR_TICKET_PRICE, kind: 'ticket', itemIndex: -2 },
       ]
       : category === 'equipment'
-        ? EQUIPMENTS.map((item) => ({ ...item, kind: 'equipment' as const, attackPower: 0 }))
-        : [
-          { name: '回復ポーション', effect: 'HPを全回復', attackPower: 0, price: POTION_PRICE, kind: 'potion' as const },
-          { name: '力のポーション', effect: '攻撃力をだんだん上げる', attackPower: 0, price: STRENGTH_POTION_PRICE, kind: 'potion' as const },
-          { name: '弱体化ポーション', effect: '敵のHPを下げる', attackPower: 0, price: WEAKNESS_POTION_PRICE, kind: 'potion' as const },
-          { name: '体力のポーション', effect: 'HPを1.5倍にする（5分）', attackPower: 0, price: HEALTH_POTION_PRICE, kind: 'potion' as const },
-          { name: '守りのポーション', effect: '防御力を上げる', attackPower: 0, price: DEFENSE_POTION_PRICE, kind: 'potion' as const },
-          { name: '混乱のポーション', effect: '敵の攻撃力を半減', attackPower: 0, price: CONFUSION_POTION_PRICE, kind: 'potion' as const },
-        ];
+        ? EQUIPMENTS
+          .map((item, itemIndex): GachaItem => ({ ...item, kind: 'equipment', itemIndex }))
+          .filter((item) => !EQUIPMENTS[item.itemIndex].gachaOnly)
+        : POTION_SHOP_ITEMS.map((item, itemIndex): GachaItem => ({ ...item, kind: 'potion', itemIndex }));
     const potionCounts = [
       this.potionCount,
       this.strengthPotionCount,
@@ -669,7 +924,7 @@ export class GameScene extends Phaser.Scene {
       const icon = this.drawShopIcon(x, 270, index, item.kind);
       this.registerShopObject(icon, x);
       const nameY = item.kind === 'potion' ? 365 : 390;
-      const name = this.addText(x, nameY, item.name, 28, '#264653').setOrigin(0.5);
+      const name = this.addText(x, nameY, item.name, item.kind === 'ticket' ? 19 : 28, '#264653').setOrigin(0.5);
       this.registerShopObject(name, x);
       if (item.kind === 'weapon') {
         const attackDetails = this.addText(x, 427, `攻撃力: ${item.attackPower}`, 20, '#457b9d').setOrigin(0.5);
@@ -677,17 +932,17 @@ export class GameScene extends Phaser.Scene {
           ? item.name === '邪剣アビス' || item.name === '聖剣エターナル' ? '無限' : 'なし'
           : `${item.durability}回`;
         const durabilityDetails = this.addText(x, 448, `耐久力: ${durabilityLabel}`, 20, '#457b9d').setOrigin(0.5);
-        const priceDetails = this.addText(x, 468, `${item.price}円`, 20, '#457b9d').setOrigin(0.5);
+        const priceDetails = this.addText(x, 478, `価格: ${item.price}円`, 18, '#457b9d').setOrigin(0.5);
         this.registerShopObject(attackDetails, x);
         this.registerShopObject(durabilityDetails, x);
         this.registerShopObject(priceDetails, x);
       } else {
         const detailText = item.kind === 'equipment'
-          ? `最大HP +${item.hpBonus}\n${item.price}円`
+          ? `最大HP +${item.hpBonus}\n価格: ${item.price}円`
           : item.kind === 'potion'
-            ? `${item.effect}\n所持数: ${potionCounts[index]}個\n${item.price}円`
-            : `${item.price}円でゲームクリア`;
-        const detailFontSize = item.kind === 'potion' ? 18 : 20;
+            ? `${item.effect}\n所持数: ${potionCounts[item.itemIndex]}個\n価格: ${item.price}円`
+            : item.itemIndex === -2 ? `${item.price.toLocaleString('ja-JP')}円\n購入して深淵の連戦へ` : `${item.price.toLocaleString('ja-JP')}円\n購入してゲームクリア`;
+          const detailFontSize = item.kind === 'potion' || item.kind === 'ticket' ? 16 : 18;
         const details = this.addText(x, 430, detailText, detailFontSize, '#457b9d').setOrigin(0.5);
         details.setAlign('center');
         this.registerShopObject(details, x);
@@ -697,24 +952,34 @@ export class GameScene extends Phaser.Scene {
       button.setInteractive({ useHandCursor: true });
       const label = this.addText(x, 510, '', 23, '#ffffff').setOrigin(0.5);
       this.registerShopObject(label, x);
-      const weaponIndex = item.kind === 'weapon' ? index + 1 : -1;
-      const equipmentIndex = item.kind === 'equipment' ? index : -1;
+      const weaponIndex = item.kind === 'weapon' ? item.itemIndex : -1;
+      const equipmentIndex = item.kind === 'equipment' ? item.itemIndex : -1;
       const purchased = item.kind === 'weapon'
         ? this.purchasedWeapons.has(weaponIndex)
         : item.kind === 'equipment' && this.purchasedEquipments.has(equipmentIndex);
       const requiredWeaponIndex = item.kind === 'weapon' ? this.getRequiredWeaponIndex(weaponIndex) : undefined;
-      const canBuy = this.money >= item.price && (requiredWeaponIndex === undefined || this.purchasedWeapons.has(requiredWeaponIndex));
+      const isLockedWeapon = requiredWeaponIndex !== undefined && !this.purchasedWeapons.has(requiredWeaponIndex);
+      const canBuy = item.kind === 'ticket'
+        ? this.money >= item.price
+        : !purchased && !isLockedWeapon && this.money >= item.price;
       const isEquipped = item.kind === 'weapon' && purchased && weaponIndex === this.weaponIndex;
-      label.setText(purchased ? (isEquipped ? '装備中' : item.kind === 'weapon' ? '装備済み' : '購入済み') : canBuy ? '購入' : '購入不可');
-      if (purchased) {
-        button.setFillStyle(isEquipped ? 0x53616f : 0x457b9d);
-        if (item.kind === 'weapon' && !isEquipped) {
-          button.on('pointerdown', () => this.equipWeapon(weaponIndex));
-        }
-      } else if (!canBuy) {
-        button.setFillStyle(0x53616f);
+      if (item.kind === 'ticket') {
+        label.setText(canBuy ? '購入' : '購入不可');
+      } else if (item.kind === 'weapon' && purchased) {
+        label.setText(isEquipped ? '装備中' : '装備');
+      } else if (item.kind === 'equipment' && purchased) {
+        label.setText('購入済み');
       } else {
-        button.on('pointerdown', () => this.requestPurchase(index, item.kind));
+        label.setText(canBuy ? '購入' : '購入不可');
+      }
+      button.setFillStyle(isEquipped || !canBuy && !purchased ? 0x53616f : purchased ? 0x457b9d : 0x2a9d8f);
+      if (item.kind === 'weapon' && purchased && !isEquipped) {
+        button.on('pointerdown', () => this.equipWeapon(weaponIndex));
+      } else if (canBuy && item.kind === 'ticket') {
+        button.on('pointerdown', () => this.requestPurchase(item.itemIndex, 'ticket'));
+      } else if (canBuy && item.kind !== 'ticket') {
+        const purchaseIndex = item.kind === 'weapon' ? weaponIndex - 1 : item.itemIndex;
+        button.on('pointerdown', () => this.requestPurchase(purchaseIndex, item.kind));
       }
       this.shopButtons.push(button);
     });
@@ -729,11 +994,169 @@ export class GameScene extends Phaser.Scene {
     rightButton.on('pointerdown', () => this.scrollShop(-1));
     this.addText(1235, 360, '>', 34, '#ffffff').setOrigin(0.5);
 
-    this.addText(GAME_WIDTH / 2, 585, '左右キーまたは矢印ボタンで商品をスクロール', 20, '#457b9d').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 555, '左右キーまたは矢印ボタンで商品を確認', 16, '#457b9d').setOrigin(0.5);
+    const gachaButton = this.addScreenObject(this.add.rectangle(640, 605, 360, 52, 0x2a9d8f));
+    gachaButton.setInteractive({ useHandCursor: true });
+    this.addText(640, 605, 'ガチャへ', 22, '#ffffff').setOrigin(0.5);
+    gachaButton.on('pointerdown', () => this.showGacha(category));
+    this.shopButtons.push(gachaButton);
     const backButton = this.addScreenObject(this.add.rectangle(640, 660, 240, 50, 0x457b9d));
     backButton.setInteractive({ useHandCursor: true });
     backButton.on('pointerdown', () => this.returnFromShop());
     this.addText(640, 660, '戻る (ESC)', 22, '#ffffff').setOrigin(0.5);
+  }
+
+  private showGacha(category: ShopCategory = this.shopCategory): void {
+    if (this.mode === 'paused') {
+      this.returnToPauseAfterGacha = true;
+    } else if (this.mode === 'shop') {
+      this.returnToShopAfterGacha = true;
+      this.gachaReturnShopCategory = this.shopCategory;
+    }
+    this.mode = 'gacha';
+    this.shopCategory = category;
+    this.pauseTimers();
+    this.clearScreen();
+    const backdrop = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x101820));
+    backdrop.setDepth(-2);
+    const grid = this.addScreenObject(this.add.graphics());
+    grid.setDepth(-1);
+    grid.lineStyle(1, 0x315354, 0.36);
+    for (let x = -720; x < 1280; x += 72) {
+      grid.lineBetween(x, 0, x + 300, 720);
+    }
+    grid.lineStyle(2, 0x57cc99, 0.18);
+    grid.lineBetween(640, 210, 640, 630);
+    this.drawHud(false);
+
+    this.addText(680, 42, 'CAPSULE LAB  /  01', 16, '#57cc99');
+    this.addText(680, 70, '運命のカプセル', 40, '#f8f9fa');
+    this.addText(682, 119, 'コインを入れて、次の冒険を引き当てよう。', 17, '#adb5bd');
+
+    const categories: Array<{ key: ShopCategory; label: string; x: number }> = [
+      { key: 'weapon', label: '武器ガチャ', x: 770 },
+      { key: 'equipment', label: '装備ガチャ', x: 950 },
+      { key: 'potion', label: 'ポーションガチャ', x: 1130 },
+    ];
+    for (const tab of categories) {
+      const button = this.addScreenObject(this.add.rectangle(tab.x, 176, 156, 42, category === tab.key ? 0x2a9d8f : 0x263746));
+      button.setStrokeStyle(2, category === tab.key ? 0xf4d35e : 0x53616f, 1);
+      button.setInteractive({ useHandCursor: true });
+      button.on('pointerdown', () => this.showGacha(tab.key));
+      this.addText(tab.x, 176, tab.label, 19, '#ffffff').setOrigin(0.5);
+    }
+
+    const candidates = this.getGachaCandidates(category);
+    const totalWeight = candidates.reduce((total, item) => total + this.getGachaWeight(item), 0);
+    const categoriesTitle = category === 'weapon' ? '武器' : category === 'equipment' ? '装備' : 'ポーション';
+    this.addText(680, 232, `${categoriesTitle}ガチャの景品`, 24, '#f4d35e');
+    this.addText(1210, 238, `${candidates.length} ITEMS`, 14, '#adb5bd').setOrigin(1, 0.5);
+
+    const rewardLines = this.addScreenObject(this.add.graphics());
+    const capsules: Phaser.GameObjects.Ellipse[] = [];
+    const capsuleData = [
+      { x: 265, y: 305, color: 0xe76f51, rotation: -0.3 },
+      { x: 340, y: 270, color: 0xf4d35e, rotation: 0.2 },
+      { x: 415, y: 310, color: 0x57cc99, rotation: 0.35 },
+      { x: 300, y: 365, color: 0x457b9d, rotation: 0.3 },
+      { x: 375, y: 365, color: 0xe76f51, rotation: -0.2 },
+    ];
+    const cabinet = this.addScreenObject(this.add.rectangle(340, 515, 400, 280, 0x1d625d));
+    cabinet.setStrokeStyle(5, 0xf4d35e, 1);
+    this.addScreenObject(this.add.rectangle(340, 424, 400, 14, 0xf4d35e));
+    const glass = this.addScreenObject(this.add.ellipse(340, 320, 292, 224, 0x173945, 0.92));
+    glass.setStrokeStyle(6, 0xf4d35e, 1);
+    for (const capsule of capsuleData) {
+      const shell = this.addScreenObject(this.add.ellipse(capsule.x, capsule.y, 68, 50, capsule.color));
+      shell.setStrokeStyle(3, 0xf8f9fa, 1);
+      shell.setRotation(capsule.rotation);
+      capsules.push(shell);
+      rewardLines.lineStyle(2, 0xf8f9fa, 0.72);
+      rewardLines.lineBetween(capsule.x - 28, capsule.y, capsule.x + 28, capsule.y);
+    }
+    const glassHighlight = this.addScreenObject(this.add.graphics());
+    glassHighlight.lineStyle(5, 0xf8f9fa, 0.3);
+    glassHighlight.strokeEllipse(272, 292, 54, 116);
+    glassHighlight.lineStyle(2, 0xf8f9fa, 0.22);
+    glassHighlight.lineBetween(230, 390, 450, 390);
+
+    const machineLabel = this.addScreenObject(this.add.rectangle(340, 486, 290, 52, 0x101820));
+    machineLabel.setStrokeStyle(2, 0x57cc99, 1);
+    this.addText(340, 486, 'COIN  /  CAPSULE', 18, '#57cc99').setOrigin(0.5);
+    const slot = this.addScreenObject(this.add.rectangle(260, 553, 116, 34, 0x101820));
+    slot.setStrokeStyle(2, 0x53616f, 1);
+    this.addText(260, 553, 'COIN SLOT', 12, '#adb5bd').setOrigin(0.5);
+    const leverStem = this.addScreenObject(this.add.rectangle(456, 546, 10, 58, 0xf4d35e));
+    leverStem.setRotation(-0.32);
+    const leverKnob = this.addScreenObject(this.add.circle(447, 514, 21, 0xe76f51));
+    leverKnob.setStrokeStyle(3, 0xf8f9fa, 1);
+    const price = GACHA_PRICES[category];
+    const createDrawButton = (x: number, pullCount: number): void => {
+      const button = this.addScreenObject(this.add.rectangle(x, 610, 126, 54, pullCount === 10 ? 0xe76f51 : 0x2a9d8f));
+      button.setStrokeStyle(3, 0xf8f9fa, 1);
+      button.setInteractive({ useHandCursor: true });
+      const canDraw = this.money >= price * pullCount && candidates.length > 0;
+      if (canDraw) {
+        button.on('pointerdown', () => this.drawGacha(category, pullCount));
+      } else {
+        button.setFillStyle(0x53616f);
+        button.setStrokeStyle(3, 0xadb5bd, 1);
+        button.removeInteractive();
+      }
+      const priceLabel = `${(price * pullCount).toLocaleString('ja-JP')}円`;
+      this.addText(x, 610, `${pullCount}回  ${priceLabel}`, 17, '#ffffff').setOrigin(0.5);
+    };
+    createDrawButton(270, 1);
+    createDrawButton(410, 10);
+
+    if (capsules.length > 0) {
+      this.tweens.add({
+        targets: capsules,
+        y: '-=7',
+        duration: 950,
+        ease: 'Sine.easeInOut',
+        yoyo: true,
+        repeat: -1,
+        delay: this.tweens.stagger(110),
+      });
+    }
+
+    const columnWidth = 274;
+    candidates.forEach((item, index) => {
+      const column = Math.floor(index / 6);
+      const row = index % 6;
+      const x = 680 + column * columnWidth;
+      const y = 280 + row * 55;
+      const chance = totalWeight > 0 ? (100 * this.getGachaWeight(item) / totalWeight).toFixed(1) : '0.0';
+      const rarityColor = item.price >= 1500 ? 0xf4d35e : item.price >= 600 ? 0xe76f51 : 0x57cc99;
+      const marker = this.addScreenObject(this.add.circle(x + 5, y + 3, 5, rarityColor));
+      marker.setStrokeStyle(1, 0xf8f9fa, 0.8);
+      const isLimited = item.gachaOnly === true;
+      this.addText(x + 20, y - 10, `${isLimited ? '【限定】' : ''}${item.name}`, 17, isLimited ? '#f4d35e' : '#f8f9fa');
+      const detail = item.kind === 'weapon'
+        ? `攻撃 ${item.attackPower}${item.gachaEffect === 'critical' ? '・20%で追撃' : item.gachaEffect === 'vampiric' ? '・命中時HP+12' : item.gachaEffect === 'execute' ? '・1/12で即死' : ''}  /  ${item.price}円`
+        : item.kind === 'equipment'
+          ? `最大HP +${item.hpBonus}${item.damageReduction ? `・被ダメージ -${item.damageReduction * 100}%` : ''}  /  ${item.price}円`
+          : `${item.effect}  /  ${item.price}円`;
+      this.addText(x + 20, y + 13, detail, 13, '#adb5bd');
+      this.addText(x + columnWidth - 12, y - 9, `${chance}%`, 18, `#${rarityColor.toString(16).padStart(6, '0')}`).setOrigin(1, 0);
+      rewardLines.lineStyle(1, 0x53616f, 0.55);
+      rewardLines.lineBetween(x, y + 34, x + columnWidth - 18, y + 34);
+    });
+
+    if (candidates.length === 0) {
+      this.addText(680, 290, 'このガチャの景品はありません', 21, '#adb5bd');
+    }
+
+    if (this.gachaMessage) {
+      const result = this.addText(340, 680, this.gachaMessage, 19, '#f4d35e').setOrigin(0.5);
+      result.setStroke('#101820', 4);
+      this.gachaMessage = undefined;
+    }
+    const backButton = this.addScreenObject(this.add.rectangle(1150, 674, 170, 42, 0x263746));
+    backButton.setInteractive({ useHandCursor: true });
+    backButton.on('pointerdown', () => this.returnFromGacha());
+    this.addText(1150, 674, '戻る  /  ESC', 17, '#ffffff').setOrigin(0.5);
   }
 
   private scrollShop(direction: number): void {
@@ -741,6 +1164,102 @@ export class GameScene extends Phaser.Scene {
     this.shopScrollOffset = Phaser.Math.Clamp(this.shopScrollOffset + direction * 290, maxOffset, 0);
     for (const cardObject of this.shopCardObjects) {
       cardObject.object.x = cardObject.baseX + this.shopScrollOffset;
+    }
+  }
+
+  private getGachaCandidates(category: ShopCategory): GachaItem[] {
+    if (category === 'weapon') {
+      return WEAPONS.slice(1)
+        .map((item, index): GachaItem => ({ ...item, kind: 'weapon', itemIndex: index + 1 }))
+        .filter((item) => {
+          const requiredWeaponIndex = this.getRequiredWeaponIndex(item.itemIndex);
+          return !this.purchasedWeapons.has(item.itemIndex)
+            && (requiredWeaponIndex === undefined || this.purchasedWeapons.has(requiredWeaponIndex));
+        });
+    }
+    if (category === 'equipment') {
+      return EQUIPMENTS
+        .map((item, itemIndex): GachaItem => ({ ...item, kind: 'equipment', itemIndex }))
+        .filter((item) => !this.purchasedEquipments.has(item.itemIndex));
+    }
+    return POTION_GACHA_ITEMS.map((item, itemIndex): GachaItem => ({ ...item, kind: 'potion', itemIndex }));
+  }
+
+  private getGachaWeight(item: GachaItem): number {
+    return 1 / (item.price * item.price);
+  }
+
+  private drawGacha(category: ShopCategory, pullCount = 1): void {
+    const price = GACHA_PRICES[category];
+    if (this.money < price * pullCount) {
+      return;
+    }
+
+    const rewards: GachaItem[] = [];
+    for (let pull = 0; pull < pullCount; pull += 1) {
+      const candidates = this.getGachaCandidates(category);
+      if (candidates.length === 0) {
+        break;
+      }
+      const totalWeight = candidates.reduce((total, item) => total + this.getGachaWeight(item), 0);
+      let roll = Math.random() * totalWeight;
+      const reward = candidates.find((item) => {
+        roll -= this.getGachaWeight(item);
+        return roll < 0;
+      }) ?? candidates[candidates.length - 1];
+      if (!reward) {
+        break;
+      }
+      this.money -= price;
+      this.grantGachaReward(reward);
+      if (reward.gachaOnly) {
+        this.unlockPlayerTitle('collector');
+      }
+      rewards.push(reward);
+    }
+    if (rewards.length === 0) {
+      return;
+    }
+
+    const resultPreview = rewards
+      .slice(0, 2)
+      .map((reward) => `${reward.gachaOnly ? '【限定】' : ''}${reward.name}`)
+      .join('、');
+    const extraRewards = rewards.length - Math.min(2, rewards.length);
+    this.gachaMessage = `${pullCount}回中${rewards.length}回: ${resultPreview}${extraRewards > 0 ? `、ほか${extraRewards}個` : ''}`;
+    this.showGacha(category);
+  }
+
+  private grantGachaReward(reward: GachaItem): void {
+    if (reward.kind === 'weapon') {
+      const requiredWeaponIndex = this.getRequiredWeaponIndex(reward.itemIndex);
+      if (requiredWeaponIndex !== undefined) {
+        this.purchasedWeapons.delete(requiredWeaponIndex);
+        this.weaponDurability.delete(requiredWeaponIndex);
+      }
+      this.weaponIndex = reward.itemIndex;
+      this.purchasedWeapons.add(reward.itemIndex);
+      this.weaponDurability.set(reward.itemIndex, reward.durability);
+    } else if (reward.kind === 'equipment') {
+      this.purchasedEquipments.add(reward.itemIndex);
+      this.playerMaxHp += reward.hpBonus;
+      this.playerHp += reward.hpBonus;
+    } else if (reward.itemIndex === 0) {
+      this.potionCount += 1;
+    } else if (reward.itemIndex === 1) {
+      this.strengthPotionCount += 1;
+    } else if (reward.itemIndex === 2) {
+      this.weaknessPotionCount += 1;
+    } else if (reward.itemIndex === 3) {
+      this.healthPotionCount += 1;
+    } else if (reward.itemIndex === 4) {
+      this.defensePotionCount += 1;
+    } else if (reward.itemIndex === 5) {
+      this.confusionPotionCount += 1;
+    } else if (reward.itemIndex === 6) {
+      this.starElixirCount += 1;
+    } else {
+      this.phoenixElixirCount += 1;
     }
   }
 
@@ -807,7 +1326,12 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.money >= CLEAR_TICKET_PRICE) {
+    if (itemIndex === -2 && this.money >= CLEAR_TICKET_PRICE) {
+      this.money -= CLEAR_TICKET_PRICE;
+      this.startEndgame();
+      return;
+    }
+    if (itemIndex === -1 && this.money >= CLEAR_TICKET_PRICE) {
       this.money -= CLEAR_TICKET_PRICE;
       this.showClear();
     }
@@ -1032,6 +1556,33 @@ export class GameScene extends Phaser.Scene {
     this.updateHud();
   }
 
+  private useStarElixir(): void {
+    if (this.starElixirCount <= 0) {
+      return;
+    }
+    this.starElixirCount -= 1;
+    this.starElixirAttacksRemaining = 3;
+    this.playPotionEffect('strength');
+    this.showFloatingText('次の3回攻撃が2.5倍', '#f4d35e', 640);
+    this.updateHud();
+  }
+
+  private usePhoenixElixir(): void {
+    if (this.phoenixElixirCount <= 0 || (this.playerHp >= this.playerMaxHp && !this.enemyAlive)) {
+      return;
+    }
+    this.phoenixElixirCount -= 1;
+    const recovery = this.playerMaxHp - this.playerHp;
+    this.playerHp = this.playerMaxHp;
+    const damage = this.enemyAlive ? Math.max(1, Math.floor(this.enemyMaxHp * 0.35)) : 0;
+    this.playPotionEffect('health');
+    if (damage > 0) {
+      this.applyDamage(damage, '#e76f51');
+    }
+    this.showFloatingText(`HP +${recovery}  敵に${damage}ダメージ`, '#f4d35e', 640);
+    this.updateHud();
+  }
+
   private playPotionEffect(type: 'strength' | 'weakness' | 'health' | 'defense' | 'confusion'): void {
     const effect = this.addScreenObject(this.add.graphics());
     effect.setDepth(EFFECT_DEPTH);
@@ -1136,23 +1687,36 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getAttackDamage(baseDamage: number): number {
-    const damage = baseDamage * this.getStrengthPotionMultiplier();
+    const elixirMultiplier = this.starElixirAttacksRemaining > 0 ? 2.5 : 1;
+    const damage = baseDamage * this.getStrengthPotionMultiplier() * elixirMultiplier;
     if (this.strengthPotionAttacksRemaining > 0) {
       this.strengthPotionAttacksRemaining -= 1;
+    }
+    if (this.starElixirAttacksRemaining > 0) {
+      this.starElixirAttacksRemaining -= 1;
     }
     return damage;
   }
 
   private applyWeaponEffects(isNormalAttack: boolean, attackDamage: number): void {
-    const weaponName = WEAPONS[this.weaponIndex].name;
+    const weapon = WEAPONS[this.weaponIndex];
+    const weaponName = weapon.name;
     if (weaponName === '邪剣アビス') {
       this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 5);
       this.showFloatingText('HP +5', '#57cc99', 400);
     }
+    if (weapon.gachaEffect === 'vampiric') {
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 12);
+      this.showFloatingText('HP +12', '#57cc99', 400);
+    }
     if (!isNormalAttack || !this.enemyAlive) {
       return;
     }
-    if (weaponName === '神速の剣' && Math.random() < 1 / 3) {
+    if (weapon.gachaEffect === 'critical' && Math.random() < 0.2) {
+      this.applyDamage(attackDamage, '#f4d35e');
+    } else if (weapon.gachaEffect === 'execute' && Math.random() < 1 / 12) {
+      this.applyDamage(this.enemyHp, '#f8f9fa');
+    } else if (weaponName === '神速の剣' && Math.random() < 1 / 3) {
       this.applyDamage(attackDamage * 2, '#f4d35e');
     } else if (weaponName === '雷鳴の剣' && Math.random() < 1 / 10) {
       this.applyDamage(150, '#a8dadc');
@@ -1284,20 +1848,26 @@ export class GameScene extends Phaser.Scene {
     this.stopDamageOverTime();
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL + (this.selectedSkillByBranch.includes(3) ? 20 : 0));
     const reward = this.getEnemyReward();
-    this.money += reward;
+    this.addMoney(reward);
+    this.totalMoneyEarned += reward;
     this.showFloatingText(`+${reward}円`, '#f4d35e', 640);
     this.defeatedCount += 1;
+    if (this.isEndgameBoss()) {
+      this.endgameBossesDefeated += 1;
+    }
     if (this.defeatedCount % KILLS_PER_LEVEL === 0 && this.level < 3) {
       this.level += 1;
       this.skillPoints += 1;
       this.showLevelUpEffect();
       this.showFloatingText('スキルポイント +1', '#57cc99', 400);
-      this.money += 100;
+      this.addMoney(100);
+      this.totalMoneyEarned += 100;
       this.playerMaxHp += 20;
       this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 20);
       this.showLevelUpEffect();
       this.showFloatingText('+100円  攻撃力+20  最大HP+20', '#f4d35e', 640);
     }
+    this.checkPlayerTitleUnlocks();
     this.updateHud();
     this.playDefeatEffect();
     this.respawnTimer = this.time.delayedCall(
@@ -1307,12 +1877,18 @@ export class GameScene extends Phaser.Scene {
           return;
         }
         this.enemyAlive = true;
-        this.chooseNextEnemyVariant();
-        this.enemyMaxHp = ENEMY_MAX_HP
-          + this.defeatedCount * ENEMY_HP_INCREASE
-          + ENEMY_VARIANTS[this.enemyVariantIndex].hpBonus;
-        this.enemyHp = this.enemyMaxHp;
-        this.isRareEnemy = Math.random() < RARE_ENEMY_CHANCE;
+        if (this.endgameMode) {
+          this.endgameWave += 1;
+          this.bestEndgameWave = Math.max(this.bestEndgameWave, this.endgameWave);
+          this.setupEndgameWave();
+        } else {
+          this.chooseNextEnemyVariant();
+          this.enemyMaxHp = ENEMY_MAX_HP
+            + this.defeatedCount * ENEMY_HP_INCREASE
+            + ENEMY_VARIANTS[this.enemyVariantIndex].hpBonus;
+          this.enemyHp = this.enemyMaxHp;
+          this.isRareEnemy = Math.random() < RARE_ENEMY_CHANCE;
+        }
         this.drawCombatants();
         this.updateHud();
       },
@@ -1335,7 +1911,8 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const incomingDamage = this.getEnemyAttackPower();
-    const damage = this.defensePotionActive ? Math.max(1, Math.floor(incomingDamage / 2)) : incomingDamage;
+    const equipmentDamage = Math.floor(incomingDamage * (1 - this.getEquipmentDamageReduction()));
+    const damage = Math.max(1, this.defensePotionActive ? Math.floor(equipmentDamage / 2) : equipmentDamage);
     this.playerHp = Math.max(0, this.playerHp - damage);
     this.cameras.main.flash(120, 230, 80, 80);
     this.tweens.add({
@@ -1360,10 +1937,15 @@ export class GameScene extends Phaser.Scene {
     const bottomWarning = this.addScreenObject(this.add.rectangle(640, 608, 1280, 8, 0xe63946, 0));
     const panel = this.addScreenObject(this.add.rectangle(640, 300, 700, 230, 0x0b1118, 0));
     panel.setStrokeStyle(5, 0xe63946, 0);
-    const title = this.addText(GAME_WIDTH / 2, 240, 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
+    const title = this.addText(GAME_WIDTH / 2, 240, this.endgameMode ? '深淵で力尽きた' : 'ゲームオーバー', 60, '#e63946').setOrigin(0.5);
     title.setAlpha(0);
-    const restartText = this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#ffffff').setOrigin(0.5);
+    const restartText = this.addText(GAME_WIDTH / 2, 390, this.endgameMode ? 'スペースキーで深淵に再挑戦' : 'スペースキーでリスタート', 28, '#ffffff').setOrigin(0.5);
     restartText.setAlpha(0);
+    if (this.endgameMode) {
+      const recordText = this.addText(GAME_WIDTH / 2, 345, `今回の到達: 第${this.endgameWave}戦  /  最高記録: 第${this.bestEndgameWave}戦`, 22, '#f4d35e').setOrigin(0.5);
+      recordText.setAlpha(0);
+      this.tweens.add({ targets: recordText, alpha: 1, duration: 450, delay: 700 });
+    }
     const exitText = this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#d9e2ec').setOrigin(0.5);
     exitText.setAlpha(0);
     this.cameras.main.shake(350, 0.012);
@@ -1412,12 +1994,44 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showClear(): void {
+    this.unlockPlayerTitle('golden_king');
     this.mode = 'clear';
     this.stopTimers();
     this.clearScreen();
     this.addText(GAME_WIDTH / 2, 280, 'ゲームクリア', 60, '#f4d35e').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 390, 'スペースキーでリスタート', 28, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 440, 'Escキーで終了', 24, '#264653').setOrigin(0.5);
+  }
+
+  private startEndgame(): void {
+    this.stopTimers();
+    this.endgameMode = true;
+    this.endgameWave = 1;
+    this.bestEndgameWave = Math.max(this.bestEndgameWave, this.endgameWave);
+    this.playerHp = this.playerMaxHp;
+    this.setupEndgameWave();
+    this.showPlaying();
+    this.showFloatingText('深淵の連戦、開始', '#f4d35e', 640);
+  }
+
+  private setupEndgameWave(): void {
+    const regularVariantCount = ENEMY_VARIANTS.length - 1;
+    const isBossWave = this.isEndgameBoss();
+    this.enemyVariantIndex = isBossWave
+      ? ENEMY_VARIANTS.length - 1
+      : (this.endgameWave - 1) % regularVariantCount;
+    const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
+    const baseHp = ENEMY_MAX_HP + this.defeatedCount * ENEMY_HP_INCREASE + variant.hpBonus;
+    const waveMultiplier = 1 + (this.endgameWave - 1) * 0.12;
+    this.enemyMaxHp = Math.round(baseHp * waveMultiplier * (isBossWave ? 3 : 1));
+    this.enemyHp = this.enemyMaxHp;
+    this.enemyAlive = true;
+    this.isRareEnemy = isBossWave;
+    this.checkPlayerTitleUnlocks();
+  }
+
+  private isEndgameBoss(): boolean {
+    return this.endgameMode && this.endgameWave > 0 && this.endgameWave % 5 === 0;
   }
 
   private drawHud(showHpBars: boolean): void {
@@ -1467,11 +2081,13 @@ export class GameScene extends Phaser.Scene {
   private updateHud(): void {
     this.hudText?.setText([
       `レベル: ${this.level}  撃破数: ${this.defeatedCount}  SP: ${this.skillPoints}`,
-      `所持金: ${this.money}円`,
-      `装備中: ${WEAPONS[this.weaponIndex].name} (攻撃力 ${this.getPlayerAttackPower()})`,
+      `所持金: ${this.money.toLocaleString('ja-JP')}円`,
+      `装備中: ${WEAPONS[this.weaponIndex].gachaOnly ? '【限定】' : ''}${WEAPONS[this.weaponIndex].name} (攻撃力 ${this.getPlayerAttackPower()})`,
       `スキル: ${this.getSelectedSkillNames()}`,
     ]);
-    this.progressText?.setText(`次のレベルまで: ${KILLS_PER_LEVEL - (this.defeatedCount % KILLS_PER_LEVEL)}体`);
+    this.progressText?.setText(this.endgameMode
+      ? `深淵 第${this.endgameWave}戦${this.isEndgameBoss() ? '  /  BOSS' : ''}`
+      : `次のレベルまで: ${KILLS_PER_LEVEL - (this.defeatedCount % KILLS_PER_LEVEL)}体`);
     this.playerHpBar?.setSize(300 * (this.playerHp / this.playerMaxHp), 24);
     this.enemyHpBar?.setSize(300 * (this.enemyHp / this.enemyMaxHp), 24);
     this.enemyAttackText?.setText(`敵攻撃力: ${this.getEnemyAttackPower()}`);
@@ -1482,6 +2098,8 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionCountText?.setText(`× ${this.healthPotionCount}`);
     this.defensePotionCountText?.setText(`× ${this.defensePotionCount}`);
     this.confusionPotionCountText?.setText(`× ${this.confusionPotionCount}`);
+    this.starElixirCountText?.setText(`× ${this.starElixirCount}`);
+    this.phoenixElixirCountText?.setText(`× ${this.phoenixElixirCount}`);
     this.clearProgressBar?.setSize(300 * Math.min(1, this.money / CLEAR_TICKET_PRICE), 12);
     this.potionSlotPanels[0]?.setFillStyle(this.potionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[1]?.setFillStyle(this.strengthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
@@ -1489,20 +2107,33 @@ export class GameScene extends Phaser.Scene {
     this.potionSlotPanels[3]?.setFillStyle(this.healthPotionCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[4]?.setFillStyle(this.defensePotionCount > 0 && !this.defensePotionActive ? 0xf8f9fa : 0xadb5bd);
     this.potionSlotPanels[5]?.setFillStyle(this.confusionPotionCount > 0 && !this.enemyWeakened ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[6]?.setFillStyle(this.starElixirCount > 0 ? 0xf8f9fa : 0xadb5bd);
+    this.potionSlotPanels[7]?.setFillStyle(this.phoenixElixirCount > 0 ? 0xf8f9fa : 0xadb5bd);
     this.updateSkillHud();
   }
 
   private getEnemyAttackPower(): number {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
-    const attackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+    const baseAttackPower = variant.attackPower + this.defeatedCount * ENEMY_ATTACK_INCREASE;
+    const waveMultiplier = this.endgameMode ? 1 + (this.endgameWave - 1) * 0.07 : 1;
+    const bossMultiplier = this.isEndgameBoss() ? 1.8 : 1;
+    const attackPower = Math.ceil(baseAttackPower * waveMultiplier * bossMultiplier);
     const skillReduced = this.selectedSkillByBranch.includes(8) ? Math.max(1, Math.floor(attackPower * 0.9)) : attackPower;
     return this.enemyWeakened ? Math.max(1, Math.floor(skillReduced / 2)) : skillReduced;
+  }
+
+  private getEquipmentDamageReduction(): number {
+    return Array.from(this.purchasedEquipments).reduce(
+      (total, equipmentIndex) => total + (EQUIPMENTS[equipmentIndex].damageReduction ?? 0),
+      0,
+    );
   }
 
   private getEnemyReward(): number {
     const variant = ENEMY_VARIANTS[this.enemyVariantIndex];
     const rareMultiplier = this.isRareEnemy ? RARE_ENEMY_REWARD_MULTIPLIER : 1;
-    return Math.round(variant.reward * this.getEnemyRewardMultiplier() * rareMultiplier);
+    const endgameMultiplier = this.endgameMode ? 1 + this.endgameWave * 0.1 : 1;
+    return Math.round(variant.reward * this.getEnemyRewardMultiplier() * rareMultiplier * endgameMultiplier);
   }
 
   private updateSkillHud(): void {
@@ -1533,15 +2164,17 @@ export class GameScene extends Phaser.Scene {
 
   private addPotionSlot(): void {
     const slots = [
-      { x: 930, name: '回復', count: this.potionCount, color: 0xe76f51, action: () => this.usePotion() },
-      { x: 990, name: '力', count: this.strengthPotionCount, color: 0xf4d35e, action: () => this.useStrengthPotion() },
-      { x: 1050, name: '弱体', count: this.weaknessPotionCount, color: 0xcdb4db, action: () => this.useWeaknessPotion() },
-      { x: 1110, name: '体力', count: this.healthPotionCount, color: 0x57cc99, action: () => this.useHealthPotion() },
-      { x: 1170, name: '守り', count: this.defensePotionCount, color: 0x457b9d, action: () => this.useDefensePotion() },
-      { x: 1230, name: '混乱', count: this.confusionPotionCount, color: 0x6d597a, action: () => this.useConfusionPotion() },
+      { x: 920, name: '回復', count: this.potionCount, color: 0xe76f51, action: () => this.usePotion() },
+      { x: 965, name: '力', count: this.strengthPotionCount, color: 0xf4d35e, action: () => this.useStrengthPotion() },
+      { x: 1010, name: '弱体', count: this.weaknessPotionCount, color: 0xcdb4db, action: () => this.useWeaknessPotion() },
+      { x: 1055, name: '体力', count: this.healthPotionCount, color: 0x57cc99, action: () => this.useHealthPotion() },
+      { x: 1100, name: '守り', count: this.defensePotionCount, color: 0x457b9d, action: () => this.useDefensePotion() },
+      { x: 1145, name: '混乱', count: this.confusionPotionCount, color: 0x6d597a, action: () => this.useConfusionPotion() },
+      { x: 1190, name: '星詠み', count: this.starElixirCount, color: 0xf4d35e, action: () => this.useStarElixir() },
+      { x: 1235, name: '不死鳥', count: this.phoenixElixirCount, color: 0xe76f51, action: () => this.usePhoenixElixir() },
     ];
     for (const slot of slots) {
-      const panel = this.addScreenObject(this.add.rectangle(slot.x, 555, 55, 100, 0xf8f9fa));
+      const panel = this.addScreenObject(this.add.rectangle(slot.x, 555, 43, 100, 0xf8f9fa));
       panel.setStrokeStyle(3, 0xd9e2ec, 1);
       panel.setInteractive({ useHandCursor: true });
       panel.on('pointerdown', slot.action);
@@ -1555,8 +2188,8 @@ export class GameScene extends Phaser.Scene {
       icon.lineStyle(2, 0x264653, 1);
       icon.strokeRoundedRect(-11, -16, 22, 32, 5);
       icon.strokeRect(-6, -24, 12, 8);
-      this.addText(slot.x, 518, slot.name, 16, '#264653').setOrigin(0.5);
-      const countText = this.addText(slot.x, 583, `× ${slot.count}`, 18, '#457b9d').setOrigin(0.5);
+      this.addText(slot.x, 518, slot.name, 13, '#264653').setOrigin(0.5);
+      const countText = this.addText(slot.x, 583, `× ${slot.count}`, 15, '#457b9d').setOrigin(0.5);
       if (slot.name === '回復') {
         this.potionCountText = countText;
       } else if (slot.name === '力') {
@@ -1567,8 +2200,12 @@ export class GameScene extends Phaser.Scene {
         this.healthPotionCountText = countText;
       } else if (slot.name === '守り') {
         this.defensePotionCountText = countText;
-      } else {
+      } else if (slot.name === '混乱') {
         this.confusionPotionCountText = countText;
+      } else if (slot.name === '星詠み') {
+        this.starElixirCountText = countText;
+      } else {
+        this.phoenixElixirCountText = countText;
       }
     }
   }
@@ -2114,7 +2751,10 @@ export class GameScene extends Phaser.Scene {
       } else {
         this.drawGoblinEnemy(variant);
       }
-      const enemyName = this.addText(640, 520, this.isRareEnemy ? `★ 金色${variant.name} ★` : variant.name, 26, this.isRareEnemy ? '#f4d35e' : '#ffffff').setOrigin(0.5);
+      const displayName = this.isEndgameBoss()
+        ? `★ 深淵の主・${variant.name} ★`
+        : this.endgameMode ? `深淵 第${this.endgameWave}戦・${variant.name}` : this.isRareEnemy ? `★ 金色${variant.name} ★` : variant.name;
+      const enemyName = this.addText(640, 520, displayName, 26, this.isRareEnemy ? '#f4d35e' : '#ffffff').setOrigin(0.5);
       enemyName.setStroke('#264653', 4);
       this.addCombatObject(enemyName);
     } else {
@@ -2466,6 +3106,8 @@ export class GameScene extends Phaser.Scene {
     this.healthPotionCountText = undefined;
     this.defensePotionCountText = undefined;
     this.confusionPotionCountText = undefined;
+    this.starElixirCountText = undefined;
+    this.phoenixElixirCountText = undefined;
     this.potionSlotPanels = [];
     this.skillTreeObjects = [];
     this.debugPanel = undefined;

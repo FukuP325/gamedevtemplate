@@ -16,6 +16,7 @@ export const ENEMY_DEFEAT_HEAL = 30;
 export const ENEMY_RESPAWN_MIN = 500;
 export const ENEMY_RESPAWN_MAX = 1000;
 export const CLEAR_TICKET_PRICE = 100000;
+export const MAX_MONEY = 9_999_990_000;
 
 export const POTION_PRICE = 100;
 export const STRENGTH_POTION_PRICE = 250;
@@ -32,6 +33,8 @@ export type Equipment = {
   name: string;
   hpBonus: number;
   price: number;
+  damageReduction?: number;
+  gachaOnly?: boolean;
 };
 
 export const EQUIPMENTS: readonly Equipment[] = [
@@ -41,6 +44,9 @@ export const EQUIPMENTS: readonly Equipment[] = [
   { name: '火守りの外套', hpBonus: 300, price: 1500 },
   { name: '不屈の鎧', hpBonus: 500, price: 2500 },
   { name: '王の冠', hpBonus: 800, price: 4000 },
+  { name: '星紋の外套', hpBonus: 300, price: 2500, damageReduction: 0.05, gachaOnly: true },
+  { name: '竜鱗の鎧', hpBonus: 550, price: 4000, damageReduction: 0.1, gachaOnly: true },
+  { name: '神獣の護符', hpBonus: 900, price: 6000, damageReduction: 0.15, gachaOnly: true },
 ];
 
 export type EnemyVariant = {
@@ -74,6 +80,8 @@ export type Weapon = {
   attackPower: number;
   durability: number | null;
   price: number;
+  gachaEffect?: 'critical' | 'vampiric' | 'execute';
+  gachaOnly?: boolean;
 };
 
 export const WEAPONS: readonly Weapon[] = [
@@ -89,4 +97,7 @@ export const WEAPONS: readonly Weapon[] = [
   { name: '天雷の剣', attackPower: 160, durability: 70, price: 1750 },
   { name: '邪剣アビス', attackPower: 180, durability: null, price: 2000 },
   { name: '聖剣エターナル', attackPower: 200, durability: null, price: 2500 },
+  { name: '星砕きの大槌', attackPower: 250, durability: 90, price: 3200, gachaEffect: 'critical', gachaOnly: true },
+  { name: '竜王の双牙', attackPower: 210, durability: 150, price: 4500, gachaEffect: 'vampiric', gachaOnly: true },
+  { name: '月影の魔剣', attackPower: 280, durability: 60, price: 6500, gachaEffect: 'execute', gachaOnly: true },
 ];
