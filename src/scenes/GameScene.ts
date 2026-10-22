@@ -31,7 +31,7 @@ import {
   WEAPONS,
 } from '../game/constants';
 
-type GameMode = 'title' | 'playing' | 'paused' | 'enemyBook' | 'skillTree' | 'shop' | 'gacha' | 'titles' | 'gameOver' | 'clear';
+type GameMode = 'title' | 'playing' | 'paused' | 'enemyBook' | 'skillTree' | 'shop' | 'gacha' | 'achievements' | 'gameOver' | 'clear';
 type ShopCategory = 'weapon' | 'equipment' | 'potion';
 type GachaItem =
   | { kind: 'weapon'; itemIndex: number; name: string; attackPower: number; durability: number | null; price: number; gachaOnly?: boolean; gachaEffect?: 'critical' | 'vampiric' | 'execute' }
@@ -60,11 +60,14 @@ const GACHA_PRICES: Record<ShopCategory, number> = {
   equipment: 500,
   potion: 500,
 };
+const MIN_GACHA_PROBABILITY = 0.001;
 
 const EFFECT_DEPTH = 20;
+const UI_TEXT_SCALE = 0.9;
 const TECHNIQUE_NAMES = ['連撃', '金の一撃', '札束パンチ', '回復'];
-const PLAYER_TITLES = [
-  { id: 'apprentice', name: '見習い冒険者', condition: '最初から所持' },
+const DISCOVERED_ENEMIES_STORAGE_KEY = 'gamedevtemplate.discoveredEnemies';
+const ACHIEVEMENTS = [
+  { id: 'first_steps', name: '冒険の始まり', condition: 'ゲームを開始する' },
   { id: 'first_blood', name: '初陣の剣士', condition: '敵を1体倒す' },
   { id: 'monster_hunter', name: '百鬼狩り', condition: '敵を50体倒す' },
   { id: 'golden_hand', name: '黄金の手', condition: '累計1万円を獲得' },
@@ -87,7 +90,7 @@ const PLAYER_TITLES = [
   { id: 'boss_legend', name: '竜王の天敵', condition: '深淵ボスを20体倒す' },
   { id: 'golden_king', name: '黄金王', condition: '脱出チケットを購入' },
 ] as const;
-type PlayerTitleId = (typeof PLAYER_TITLES)[number]['id'];
+type AchievementId = (typeof ACHIEVEMENTS)[number]['id'];
 
 export class GameScene extends Phaser.Scene {
   private mode: GameMode = 'title';
@@ -99,9 +102,11 @@ export class GameScene extends Phaser.Scene {
   private skillLevels = [1, 0, 0, 0];
   private defeatedCount = 0;
   private totalMoneyEarned = 0;
-  private unlockedTitleIds = new Set<PlayerTitleId>(['apprentice']);
-  private selectedTitleId: PlayerTitleId = 'apprentice';
-  private titlePage = 0;
+  private unlockedAchievementIds = new Set<AchievementId>();
+  private achievementCountText?: Phaser.GameObjects.Text;
+  private achievementPage = 0;
+  private achievementQueue: AchievementId[] = [];
+  private isShowingAchievementPopup = false;
   private endgameMode = false;
   private endgameWave = 0;
   private bestEndgameWave = 0;
@@ -135,6 +140,7 @@ export class GameScene extends Phaser.Scene {
   private skillTreeObjects: Phaser.GameObjects.GameObject[] = [];
   private weaponDurability = new Map<number, number | null>();
   private purchasedWeapons = new Set<number>();
+  private gachaUnlockedWeaponIds = new Set<number>();
   private purchasedEquipments = new Set<number>();
   private enemyAlive = true;
   private lastAttackAt = -PLAYER_ATTACK_INTERVAL;
@@ -224,8 +230,8 @@ export class GameScene extends Phaser.Scene {
       this.returnFromShop();
     } else if (this.mode === 'gacha') {
       this.returnFromGacha();
-    } else if (this.mode === 'titles') {
-      this.returnFromTitles();
+    } else if (this.mode === 'achievements') {
+      this.returnFromAchievements();
     } else if (this.mode === 'gameOver' || this.mode === 'clear') {
       this.resetGame();
       this.showTitle();
@@ -280,6 +286,7 @@ export class GameScene extends Phaser.Scene {
       window.removeEventListener('keydown', this.escapeListener);
       window.removeEventListener('keydown', this.debugListener);
     });
+    this.loadDiscoveredEnemies();
     this.showTitle();
   }
 
@@ -317,7 +324,7 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       if (Phaser.Input.Keyboard.JustDown(this.yKey)) {
-        this.showTitles();
+        this.showAchievements();
         return;
       }
       if (Phaser.Input.Keyboard.JustDown(this.tKey)) {
@@ -392,7 +399,6 @@ export class GameScene extends Phaser.Scene {
     this.enemyMaxHp = ENEMY_MAX_HP;
     this.enemyHp = this.enemyMaxHp;
     this.enemyVariantIndex = 0;
-    this.discoveredEnemies.clear();
     this.isRareEnemy = Math.random() < RARE_ENEMY_CHANCE;
     this.lastSkillAt = -SKILL_COOLDOWN;
     this.lastMoneyPunchAt = -MONEY_PUNCH_COOLDOWN;
@@ -419,6 +425,7 @@ export class GameScene extends Phaser.Scene {
     this.selectedSkillByBranch = [undefined, undefined, undefined];
     this.purchasedWeapons.clear();
     this.purchasedWeapons.add(1);
+    this.gachaUnlockedWeaponIds.clear();
     this.weaponDurability.clear();
     this.weaponDurability.set(1, WEAPONS[1].durability);
     this.purchasedWeapons.add(1);
@@ -451,10 +458,11 @@ export class GameScene extends Phaser.Scene {
     this.drawCombatants();
     this.addSkillButtons();
     this.addPotionSlot();
-    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'Esc:メニュー E:ショップ G:ガチャ Y:称号 T:スキル 5〜0:薬 Q/W:限定薬', 20, '#ffffff').setOrigin(0.5);
+    this.unlockAchievement('first_steps');
+    const controlsText = this.addText(GAME_WIDTH / 2, 650, 'Esc:メニュー E:ショップ G:ガチャ Y:実績 T:スキル 5〜0:薬 Q/W:限定薬', 20, '#ffffff').setOrigin(0.5);
     controlsText.setStroke('#264653', 4);
-    const titleLabel = this.addText(GAME_WIDTH / 2, 25, `称号  /  ${this.getPlayerTitleName(this.selectedTitleId)}`, 18, '#f4d35e').setOrigin(0.5);
-    titleLabel.setStroke('#264653', 4);
+    this.achievementCountText = this.addText(GAME_WIDTH / 2, 25, `実績 ${this.unlockedAchievementIds.size} / ${ACHIEVEMENTS.length}`, 18, '#f4d35e').setOrigin(0.5);
+    this.achievementCountText.setStroke('#264653', 4);
     this.startEnemyAttackTimer();
   }
 
@@ -475,7 +483,7 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects.push(overlay);
     const pauseText = this.addScreenObject(this.add.text(640, 180, 'pause', {
       fontFamily: 'sans-serif',
-      fontSize: '64px',
+      fontSize: this.getScaledFontSize(64),
       color: '#ffffff',
     }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(pauseText);
@@ -488,7 +496,7 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects.push(shopButton);
     const shopButtonText = this.addScreenObject(this.add.text(640, 360, 'ショップへ', {
       fontFamily: 'sans-serif',
-      fontSize: '28px',
+      fontSize: this.getScaledFontSize(28),
       color: '#ffffff',
     }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(shopButtonText);
@@ -498,7 +506,7 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects.push(skillTreeButton);
     const skillTreeButtonText = this.addScreenObject(this.add.text(640, 455, 'スキルツリー', {
       fontFamily: 'sans-serif',
-      fontSize: '28px',
+      fontSize: this.getScaledFontSize(28),
       color: '#ffffff',
     }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(skillTreeButtonText);
@@ -508,7 +516,7 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects.push(enemyBookButton);
     const enemyBookButtonText = this.addScreenObject(this.add.text(640, 550, '敵図鑑', {
       fontFamily: 'sans-serif',
-      fontSize: '28px',
+      fontSize: this.getScaledFontSize(28),
       color: '#ffffff',
     }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(enemyBookButtonText);
@@ -521,7 +529,7 @@ export class GameScene extends Phaser.Scene {
     this.pauseOverlayObjects.push(gachaButton);
     const gachaButtonText = this.addScreenObject(this.add.text(640, 645, 'ガチャへ', {
       fontFamily: 'sans-serif',
-      fontSize: '24px',
+      fontSize: this.getScaledFontSize(24),
       color: '#ffffff',
     }).setOrigin(0.5).setDepth(1001));
     this.pauseOverlayObjects.push(gachaButtonText);
@@ -549,12 +557,12 @@ export class GameScene extends Phaser.Scene {
       const y = 130 + row * 142;
       const card = this.addScreenObject(this.add.rectangle(x, y, 300, 132, discovered ? 0x263746 : 0x18232d));
       card.setStrokeStyle(2, discovered ? 0x57cc99 : 0x53616f, 1);
-      this.drawEnemyBookPortrait(variant, x, y - 15, discovered);
-      this.addText(x, y - 51, discovered ? variant.name : '???', 20, discovered ? '#f8f9fa' : '#adb5bd').setOrigin(0.5);
+      this.drawEnemyBookPortrait(variant, x, y - 10, discovered);
+      this.addText(x, y - 54, discovered ? variant.name : '???', 20, discovered ? '#f8f9fa' : '#adb5bd').setOrigin(0.5);
       const stats = discovered
         ? `HP ${ENEMY_MAX_HP + variant.hpBonus} (+${ENEMY_HP_INCREASE}/撃破)\n攻撃 ${variant.attackPower} (+${ENEMY_ATTACK_INCREASE}/撃破)\n通常報酬 ${variant.reward}円`
         : 'HP ???   攻撃 ???\n報酬 ???';
-      this.addText(x, y + 28, stats, 14, discovered ? '#d9e2ec' : '#7f8c98').setOrigin(0.5);
+      this.addText(x, y + 44, stats, 12, discovered ? '#d9e2ec' : '#7f8c98').setOrigin(0.5);
     });
 
     this.addText(640, 670, `発見 ${this.discoveredEnemies.size}/${ENEMY_VARIANTS.length}    Esc: 戻る`, 18, '#d9e2ec').setOrigin(0.5);
@@ -575,6 +583,40 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private loadDiscoveredEnemies(): void {
+    try {
+      const savedEnemies = window.localStorage.getItem(DISCOVERED_ENEMIES_STORAGE_KEY);
+      if (!savedEnemies) {
+        return;
+      }
+      const parsed: unknown = JSON.parse(savedEnemies);
+      if (!Array.isArray(parsed)) {
+        return;
+      }
+      parsed.forEach((enemyIndex: unknown) => {
+        if (typeof enemyIndex === 'number'
+          && Number.isInteger(enemyIndex)
+          && enemyIndex >= 0
+          && enemyIndex < ENEMY_VARIANTS.length) {
+          this.discoveredEnemies.add(enemyIndex);
+        }
+      });
+    } catch {
+      this.discoveredEnemies.clear();
+    }
+  }
+
+  private recordDiscoveredEnemy(): void {
+    this.discoveredEnemies.add(this.enemyVariantIndex);
+    try {
+      window.localStorage.setItem(
+        DISCOVERED_ENEMIES_STORAGE_KEY,
+        JSON.stringify(Array.from(this.discoveredEnemies)),
+      );
+    } catch {
+    }
+  }
+
   private drawEnemyBookPortrait(
     variant: (typeof ENEMY_VARIANTS)[number],
     x: number,
@@ -583,6 +625,7 @@ export class GameScene extends Phaser.Scene {
   ): void {
     const portrait = this.addScreenObject(this.add.graphics());
     portrait.setPosition(x, y);
+    portrait.setScale(0.55);
     const bodyColor = discovered ? variant.bodyColor : 0x0b1118;
     const headColor = discovered ? variant.headColor : 0x0b1118;
 
@@ -759,111 +802,136 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private showTitles(): void {
+  private showAchievements(): void {
     if (this.mode === 'playing') {
       this.pausedAt = this.time.now;
     }
-    this.mode = 'titles';
+    this.mode = 'achievements';
     this.pauseTimers();
     this.clearScreen();
     this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x101820));
-    this.addText(640, 52, '称号図鑑', 42, '#f4d35e').setOrigin(0.5);
-    this.addText(640, 93, `装備中  /  ${this.getPlayerTitleName(this.selectedTitleId)}`, 20, '#f8f9fa').setOrigin(0.5);
-    this.addText(265, 145, '称号', 16, '#57cc99');
-    this.addText(690, 145, '獲得条件', 16, '#57cc99');
+    this.addText(640, 52, '実績一覧', 42, '#f4d35e').setOrigin(0.5);
+    this.addText(640, 93, `達成数  /  ${this.unlockedAchievementIds.size} / ${ACHIEVEMENTS.length}`, 20, '#f8f9fa').setOrigin(0.5);
+    this.addText(265, 145, '実績', 16, '#57cc99');
+    this.addText(690, 145, '達成条件', 16, '#57cc99');
 
-    const titlesPerPage = 8;
-    const pageCount = Math.ceil(PLAYER_TITLES.length / titlesPerPage);
-    this.titlePage = Phaser.Math.Clamp(this.titlePage, 0, pageCount - 1);
-    const visibleTitles = PLAYER_TITLES.slice(this.titlePage * titlesPerPage, (this.titlePage + 1) * titlesPerPage);
-    visibleTitles.forEach((title, index) => {
+    const achievementsPerPage = 8;
+    const pageCount = Math.ceil(ACHIEVEMENTS.length / achievementsPerPage);
+    this.achievementPage = Phaser.Math.Clamp(this.achievementPage, 0, pageCount - 1);
+    const visibleAchievements = ACHIEVEMENTS.slice(this.achievementPage * achievementsPerPage, (this.achievementPage + 1) * achievementsPerPage);
+    visibleAchievements.forEach((achievement, index) => {
       const y = 184 + index * 54;
-      const unlocked = this.unlockedTitleIds.has(title.id);
-      const selected = this.selectedTitleId === title.id;
-      const row = this.addScreenObject(this.add.rectangle(640, y, 900, 46, selected ? 0x264653 : unlocked ? 0x1d3039 : 0x18232d));
-      row.setStrokeStyle(2, selected ? 0xf4d35e : unlocked ? 0x57cc99 : 0x53616f, 1);
-      if (unlocked) {
-        row.setInteractive({ useHandCursor: true });
-        row.on('pointerdown', () => {
-          this.selectedTitleId = title.id;
-          this.showTitles();
-        });
-      }
-      this.addText(230, y, unlocked ? title.name : '？？？？', 20, unlocked ? '#f8f9fa' : '#7f8c98').setOrigin(0, 0.5);
-      this.addText(690, y, title.condition, 16, unlocked ? '#adb5bd' : '#667783').setOrigin(0, 0.5);
-      this.addText(1060, y, selected ? '装備中' : unlocked ? '装備する' : '未獲得', 15, selected ? '#f4d35e' : unlocked ? '#57cc99' : '#667783').setOrigin(1, 0.5);
+      const unlocked = this.unlockedAchievementIds.has(achievement.id);
+      const row = this.addScreenObject(this.add.rectangle(640, y, 900, 46, unlocked ? 0x1d3039 : 0x18232d));
+      row.setStrokeStyle(2, unlocked ? 0x57cc99 : 0x53616f, 1);
+      this.addText(230, y, unlocked ? achievement.name : '？？？？', 20, unlocked ? '#f8f9fa' : '#7f8c98').setOrigin(0, 0.5);
+      this.addText(690, y, achievement.condition, 16, unlocked ? '#adb5bd' : '#667783').setOrigin(0, 0.5);
+      this.addText(1060, y, unlocked ? '達成済み' : '未達成', 15, unlocked ? '#57cc99' : '#667783').setOrigin(1, 0.5);
     });
 
-    this.addText(640, 615, `${this.titlePage + 1} / ${pageCount}`, 17, '#adb5bd').setOrigin(0.5);
-    if (this.titlePage > 0) {
+    this.addText(640, 615, `${this.achievementPage + 1} / ${pageCount}`, 17, '#adb5bd').setOrigin(0.5);
+    if (this.achievementPage > 0) {
       const previousButton = this.addScreenObject(this.add.rectangle(535, 615, 110, 38, 0x263746));
       previousButton.setInteractive({ useHandCursor: true });
       previousButton.on('pointerdown', () => {
-        this.titlePage -= 1;
-        this.showTitles();
+        this.achievementPage -= 1;
+        this.showAchievements();
       });
       this.addText(535, 615, '前へ', 16, '#ffffff').setOrigin(0.5);
     }
-    if (this.titlePage < pageCount - 1) {
+    if (this.achievementPage < pageCount - 1) {
       const nextButton = this.addScreenObject(this.add.rectangle(745, 615, 110, 38, 0x263746));
       nextButton.setInteractive({ useHandCursor: true });
       nextButton.on('pointerdown', () => {
-        this.titlePage += 1;
-        this.showTitles();
+        this.achievementPage += 1;
+        this.showAchievements();
       });
       this.addText(745, 615, '次へ', 16, '#ffffff').setOrigin(0.5);
     }
 
     const backButton = this.addScreenObject(this.add.rectangle(640, 660, 220, 48, 0x457b9d));
     backButton.setInteractive({ useHandCursor: true });
-    backButton.on('pointerdown', () => this.returnFromTitles());
+    backButton.on('pointerdown', () => this.returnFromAchievements());
     this.addText(640, 660, '戻る  /  ESC', 19, '#ffffff').setOrigin(0.5);
   }
 
-  private returnFromTitles(): void {
+  private returnFromAchievements(): void {
     this.applyPausedDuration();
     this.showPlaying();
   }
 
-  private getPlayerTitleName(titleId: PlayerTitleId): string {
-    return PLAYER_TITLES.find((title) => title.id === titleId)?.name ?? PLAYER_TITLES[0].name;
-  }
-
-  private unlockPlayerTitle(titleId: PlayerTitleId): void {
-    if (this.unlockedTitleIds.has(titleId)) {
+  private unlockAchievement(achievementId: AchievementId): void {
+    if (this.unlockedAchievementIds.has(achievementId)) {
       return;
     }
-    this.unlockedTitleIds.add(titleId);
-    if (this.mode === 'playing') {
-      this.showFloatingText(`称号獲得  /  ${this.getPlayerTitleName(titleId)}`, '#f4d35e', 640);
+    this.unlockedAchievementIds.add(achievementId);
+    this.achievementCountText?.setText(`実績 ${this.unlockedAchievementIds.size} / ${ACHIEVEMENTS.length}`);
+    this.achievementQueue.push(achievementId);
+    this.showNextAchievementPopup();
+  }
+
+  private showNextAchievementPopup(): void {
+    if (this.isShowingAchievementPopup) {
+      return;
     }
+    const achievementId = this.achievementQueue.shift();
+    const achievement = ACHIEVEMENTS.find((entry) => entry.id === achievementId);
+    if (!achievement) {
+      return;
+    }
+
+    this.isShowingAchievementPopup = true;
+    const panel = this.add.rectangle(640, 104, 520, 112, 0x101820, 0.97)
+      .setStrokeStyle(4, 0xf4d35e, 1)
+      .setDepth(5000);
+    const heading = this.add.text(640, 72, '実績達成', {
+      fontFamily: 'sans-serif',
+      fontSize: this.getScaledFontSize(18),
+      color: '#f4d35e',
+    }).setOrigin(0.5).setDepth(5001);
+    const name = this.add.text(640, 105, achievement.name, {
+      fontFamily: 'sans-serif',
+      fontSize: this.getScaledFontSize(28),
+      color: '#ffffff',
+    }).setOrigin(0.5).setDepth(5001);
+    const condition = this.add.text(640, 137, achievement.condition, {
+      fontFamily: 'sans-serif',
+      fontSize: this.getScaledFontSize(16),
+      color: '#adb5bd',
+    }).setOrigin(0.5).setDepth(5001);
+    const popupObjects = [panel, heading, name, condition];
+    this.time.delayedCall(2000, () => {
+      popupObjects.forEach((object) => object.destroy());
+      this.isShowingAchievementPopup = false;
+      this.showNextAchievementPopup();
+    });
   }
 
   private checkPlayerTitleUnlocks(): void {
-    if (this.defeatedCount >= 1) this.unlockPlayerTitle('first_blood');
-    if (this.defeatedCount >= 50) this.unlockPlayerTitle('monster_hunter');
-    if (this.totalMoneyEarned >= 10000) this.unlockPlayerTitle('golden_hand');
-    if (this.totalMoneyEarned >= 100000) this.unlockPlayerTitle('gold_saver');
-    if (this.totalMoneyEarned >= 1000000) this.unlockPlayerTitle('gold_trader');
-    if (this.totalMoneyEarned >= 10000000) this.unlockPlayerTitle('gold_tycoon');
-    if (this.totalMoneyEarned >= 100000000) this.unlockPlayerTitle('millionaire');
-    if (this.totalMoneyEarned >= 1000000000) this.unlockPlayerTitle('billionaire');
-    if (this.bestEndgameWave >= 1) this.unlockPlayerTitle('abyss_entry');
-    if (this.bestEndgameWave >= 5) this.unlockPlayerTitle('abyss_walker');
-    if (this.bestEndgameWave >= 10) this.unlockPlayerTitle('abyss_veteran');
-    if (this.bestEndgameWave >= 20) this.unlockPlayerTitle('abyss_legend');
-    if (this.bestEndgameWave >= 30) this.unlockPlayerTitle('abyss_conqueror');
-    if (this.bestEndgameWave >= 50) this.unlockPlayerTitle('abyss_immortal');
-    if (this.bestEndgameWave >= 100) this.unlockPlayerTitle('abyss_eternal');
-    if (this.endgameBossesDefeated >= 1) this.unlockPlayerTitle('first_boss');
-    if (this.endgameBossesDefeated >= 5) this.unlockPlayerTitle('boss_hunter');
-    if (this.endgameBossesDefeated >= 20) this.unlockPlayerTitle('boss_legend');
+    if (this.defeatedCount >= 1) this.unlockAchievement('first_blood');
+    if (this.defeatedCount >= 50) this.unlockAchievement('monster_hunter');
+    if (this.totalMoneyEarned >= 10000) this.unlockAchievement('golden_hand');
+    if (this.totalMoneyEarned >= 100000) this.unlockAchievement('gold_saver');
+    if (this.totalMoneyEarned >= 1000000) this.unlockAchievement('gold_trader');
+    if (this.totalMoneyEarned >= 10000000) this.unlockAchievement('gold_tycoon');
+    if (this.totalMoneyEarned >= 100000000) this.unlockAchievement('millionaire');
+    if (this.totalMoneyEarned >= 1000000000) this.unlockAchievement('billionaire');
+    if (this.bestEndgameWave >= 1) this.unlockAchievement('abyss_entry');
+    if (this.bestEndgameWave >= 5) this.unlockAchievement('abyss_walker');
+    if (this.bestEndgameWave >= 10) this.unlockAchievement('abyss_veteran');
+    if (this.bestEndgameWave >= 20) this.unlockAchievement('abyss_legend');
+    if (this.bestEndgameWave >= 30) this.unlockAchievement('abyss_conqueror');
+    if (this.bestEndgameWave >= 50) this.unlockAchievement('abyss_immortal');
+    if (this.bestEndgameWave >= 100) this.unlockAchievement('abyss_eternal');
+    if (this.endgameBossesDefeated >= 1) this.unlockAchievement('first_boss');
+    if (this.endgameBossesDefeated >= 5) this.unlockAchievement('boss_hunter');
+    if (this.endgameBossesDefeated >= 20) this.unlockAchievement('boss_legend');
   }
 
   private addMoney(amount: number): void {
     this.money = Math.min(MAX_MONEY, this.money + amount);
     if (this.money >= MAX_MONEY) {
-      this.unlockPlayerTitle('money_limit');
+      this.unlockAchievement('money_limit');
     }
   }
 
@@ -1047,7 +1115,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     const candidates = this.getGachaCandidates(category);
-    const totalWeight = candidates.reduce((total, item) => total + this.getGachaWeight(item), 0);
+    const probabilities = this.getGachaProbabilities(candidates);
     const categoriesTitle = category === 'weapon' ? '武器' : category === 'equipment' ? '装備' : 'ポーション';
     this.addText(680, 232, `${categoriesTitle}ガチャの景品`, 24, '#f4d35e');
     this.addText(1210, 238, `${candidates.length} ITEMS`, 14, '#adb5bd').setOrigin(1, 0.5);
@@ -1127,7 +1195,7 @@ export class GameScene extends Phaser.Scene {
       const row = index % 6;
       const x = 680 + column * columnWidth;
       const y = 280 + row * 55;
-      const chance = totalWeight > 0 ? (100 * this.getGachaWeight(item) / totalWeight).toFixed(1) : '0.0';
+      const chance = ((probabilities[index] ?? 0) * 100).toFixed(1);
       const rarityColor = item.price >= 1500 ? 0xf4d35e : item.price >= 600 ? 0xe76f51 : 0x57cc99;
       const marker = this.addScreenObject(this.add.circle(x + 5, y + 3, 5, rarityColor));
       marker.setStrokeStyle(1, 0xf8f9fa, 0.8);
@@ -1146,6 +1214,10 @@ export class GameScene extends Phaser.Scene {
 
     if (candidates.length === 0) {
       this.addText(680, 290, 'このガチャの景品はありません', 21, '#adb5bd');
+    }
+
+    if (category !== 'potion') {
+      this.addText(24, 682, '排出されたら装備されます', 10, '#adb5bd');
     }
 
     if (this.gachaMessage) {
@@ -1173,20 +1245,32 @@ export class GameScene extends Phaser.Scene {
         .map((item, index): GachaItem => ({ ...item, kind: 'weapon', itemIndex: index + 1 }))
         .filter((item) => {
           const requiredWeaponIndex = this.getRequiredWeaponIndex(item.itemIndex);
-          return !this.purchasedWeapons.has(item.itemIndex)
-            && (requiredWeaponIndex === undefined || this.purchasedWeapons.has(requiredWeaponIndex));
+          return this.gachaUnlockedWeaponIds.has(item.itemIndex)
+            || this.purchasedWeapons.has(item.itemIndex)
+            || requiredWeaponIndex === undefined
+            || this.purchasedWeapons.has(requiredWeaponIndex);
         });
     }
     if (category === 'equipment') {
       return EQUIPMENTS
-        .map((item, itemIndex): GachaItem => ({ ...item, kind: 'equipment', itemIndex }))
-        .filter((item) => !this.purchasedEquipments.has(item.itemIndex));
+        .map((item, itemIndex): GachaItem => ({ ...item, kind: 'equipment', itemIndex }));
     }
     return POTION_GACHA_ITEMS.map((item, itemIndex): GachaItem => ({ ...item, kind: 'potion', itemIndex }));
   }
 
   private getGachaWeight(item: GachaItem): number {
     return 1 / (item.price * item.price);
+  }
+
+  private getGachaProbabilities(candidates: GachaItem[]): number[] {
+    const weights = candidates.map((item) => this.getGachaWeight(item));
+    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+    if (totalWeight === 0) {
+      return weights;
+    }
+
+    const remainingProbability = 1 - candidates.length * MIN_GACHA_PROBABILITY;
+    return weights.map((weight) => MIN_GACHA_PROBABILITY + remainingProbability * (weight / totalWeight));
   }
 
   private drawGacha(category: ShopCategory, pullCount = 1): void {
@@ -1201,19 +1285,20 @@ export class GameScene extends Phaser.Scene {
       if (candidates.length === 0) {
         break;
       }
-      const totalWeight = candidates.reduce((total, item) => total + this.getGachaWeight(item), 0);
-      let roll = Math.random() * totalWeight;
-      const reward = candidates.find((item) => {
-        roll -= this.getGachaWeight(item);
+      const probabilities = this.getGachaProbabilities(candidates);
+      let roll = Math.random();
+      const rewardIndex = probabilities.findIndex((probability) => {
+        roll -= probability;
         return roll < 0;
-      }) ?? candidates[candidates.length - 1];
+      });
+      const reward = candidates[rewardIndex] ?? candidates[candidates.length - 1];
       if (!reward) {
         break;
       }
       this.money -= price;
       this.grantGachaReward(reward);
       if (reward.gachaOnly) {
-        this.unlockPlayerTitle('collector');
+        this.unlockAchievement('collector');
       }
       rewards.push(reward);
     }
@@ -1239,6 +1324,7 @@ export class GameScene extends Phaser.Scene {
       }
       this.weaponIndex = reward.itemIndex;
       this.purchasedWeapons.add(reward.itemIndex);
+      this.gachaUnlockedWeaponIds.add(reward.itemIndex);
       this.weaponDurability.set(reward.itemIndex, reward.durability);
     } else if (reward.kind === 'equipment') {
       this.purchasedEquipments.add(reward.itemIndex);
@@ -1282,6 +1368,7 @@ export class GameScene extends Phaser.Scene {
       }
       this.weaponIndex = weaponIndex;
       this.purchasedWeapons.add(weaponIndex);
+      this.gachaUnlockedWeaponIds.add(weaponIndex);
       this.weaponDurability.set(weaponIndex, weapon.durability);
       this.showPlaying();
       return;
@@ -1827,7 +1914,7 @@ export class GameScene extends Phaser.Scene {
   private showFloatingText(message: string, color: string, x: number): void {
     const damageText = this.addScreenObject(this.add.text(x, 330, message, {
       fontFamily: 'sans-serif',
-      fontSize: '38px',
+      fontSize: this.getScaledFontSize(38),
       color,
       stroke: '#264653',
       strokeThickness: 5,
@@ -1844,7 +1931,7 @@ export class GameScene extends Phaser.Scene {
 
   private defeatEnemy(): void {
     this.enemyAlive = false;
-    this.discoveredEnemies.add(this.enemyVariantIndex);
+    this.recordDiscoveredEnemy();
     this.stopDamageOverTime();
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + ENEMY_DEFEAT_HEAL + (this.selectedSkillByBranch.includes(3) ? 20 : 0));
     const reward = this.getEnemyReward();
@@ -1994,7 +2081,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showClear(): void {
-    this.unlockPlayerTitle('golden_king');
+    this.unlockAchievement('golden_king');
     this.mode = 'clear';
     this.stopTimers();
     this.clearScreen();
@@ -2430,7 +2517,7 @@ export class GameScene extends Phaser.Scene {
   private playSkillLabel(label: string, color: string): void {
     const skillLabel = this.addScreenObject(this.add.text(640, 190, label, {
       fontFamily: 'sans-serif',
-      fontSize: '44px',
+      fontSize: this.getScaledFontSize(44),
       color,
       stroke: '#264653',
       strokeThickness: 6,
@@ -2448,7 +2535,7 @@ export class GameScene extends Phaser.Scene {
   private showLevelUpEffect(): void {
     const levelLabel = this.addScreenObject(this.add.text(640, 120, `レベル${this.level}！`, {
       fontFamily: 'sans-serif',
-      fontSize: '48px',
+      fontSize: this.getScaledFontSize(48),
       color: '#f4d35e',
       stroke: '#264653',
       strokeThickness: 6,
@@ -2466,7 +2553,7 @@ export class GameScene extends Phaser.Scene {
   private playDefeatEffect(): void {
     const defeatText = this.addScreenObject(this.add.text(640, 350, '撃破！', {
       fontFamily: 'sans-serif',
-      fontSize: '42px',
+      fontSize: this.getScaledFontSize(42),
       color: '#f4d35e',
       stroke: '#3d405b',
       strokeThickness: 6,
@@ -2524,8 +2611,7 @@ export class GameScene extends Phaser.Scene {
     this.mode = 'skillTree';
     this.pauseTimers();
     this.clearScreen();
-    const panel = this.addScreenObject(this.add.rectangle(640, 360, 1180, 650, 0xf8f9fa));
-    panel.setStrokeStyle(5, 0x2a9d8f, 1);
+    this.addScreenObject(this.add.rectangle(640, 360, 1180, 650, 0xf8f9fa));
     this.addText(640, 55, 'スキルツリー', 44, '#264653').setOrigin(0.5);
     this.addText(640, 92, '各枝から1個を装備。未開放スキルはSP 1で開放できます。', 18, '#457b9d').setOrigin(0.5);
 
@@ -2552,7 +2638,7 @@ export class GameScene extends Phaser.Scene {
         ));
         button.setStrokeStyle(3, selected ? 0xf4d35e : unlocked ? 0xd9e2ec : 0xadb5bd, 1);
         button.setInteractive({ useHandCursor: true });
-        button.on('pointerdown', () => this.selectSkillTreeSkill(skill.id));
+        button.on('pointerdown', () => this.showSkillSelectionDialog(skill.id));
         this.skillTreeObjects.push(button);
         const title = this.addText(branchX[branch], y - 17, skill.name, 21, selected ? '#ffffff' : '#264653').setOrigin(0.5);
         const detail = unlocked
@@ -2606,6 +2692,54 @@ export class GameScene extends Phaser.Scene {
     this.skillPoints -= 1;
     this.skillLevels[techniqueIndex] = 1;
     this.showSkillTree(this.returnToPauseAfterSkillTree);
+  }
+
+  private showSkillSelectionDialog(skillId: number): void {
+    const skill = this.getSkillTreeData()[skillId];
+    if (!skill) {
+      return;
+    }
+
+    const currentSkillId = this.selectedSkillByBranch[skill.branch];
+    const currentSkill = currentSkillId === undefined ? undefined : this.getSkillTreeData()[currentSkillId];
+    const currentSkillName = currentSkill?.name ?? 'なし';
+    const alreadySelected = currentSkillId === skillId;
+    const unlocked = this.unlockedSkillIds.has(skillId);
+    const canEquip = !alreadySelected && (unlocked || this.skillPoints > 0);
+
+    const overlay = this.addScreenObject(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.62));
+    overlay.setInteractive().setDepth(3000);
+    const panel = this.addScreenObject(this.add.rectangle(640, 360, 620, 280, 0xf8f9fa));
+    panel.setStrokeStyle(3, 0x2a9d8f, 1);
+    panel.setInteractive().setDepth(3001);
+    this.addText(640, 247, 'スキル交換の確認', 26, '#264653').setOrigin(0.5).setDepth(3002);
+    this.addText(640, 286, `現在: ${currentSkillName}`, 17, '#457b9d').setOrigin(0.5).setDepth(3002);
+    this.addText(640, 313, `効果: ${currentSkill?.description ?? 'なし'}`, 16, '#6c757d').setOrigin(0.5).setDepth(3002);
+    this.addText(640, 352, `変更後: ${skill.name}`, 17, '#2a9d8f').setOrigin(0.5).setDepth(3002);
+    this.addText(640, 379, `効果: ${skill.description}`, 16, '#264653').setOrigin(0.5).setDepth(3002);
+    const status = alreadySelected
+      ? 'このスキルは装備中です'
+      : unlocked
+        ? '開放済み・SP消費なし'
+        : this.skillPoints > 0 ? '開放して装備: SP 1' : '開放にはスキルポイントが必要です';
+    this.addText(640, 416, status, 16, '#6c757d').setOrigin(0.5).setDepth(3002);
+
+    if (canEquip) {
+      const confirmButton = this.addScreenObject(this.add.rectangle(520, 465, 220, 48, 0x2a9d8f));
+      confirmButton.setInteractive({ useHandCursor: true }).setDepth(3002);
+      confirmButton.on('pointerdown', () => this.selectSkillTreeSkill(skillId));
+      this.addText(520, 465, unlocked ? 'このスキルに交換' : 'SP 1で開放・装備', 15, '#ffffff')
+        .setOrigin(0.5)
+        .setDepth(3003);
+    }
+
+    const cancelX = canEquip ? 760 : 640;
+    const cancelButton = this.addScreenObject(this.add.rectangle(cancelX, 465, 180, 48, 0x457b9d));
+    cancelButton.setInteractive({ useHandCursor: true }).setDepth(3002);
+    cancelButton.on('pointerdown', () => this.showSkillTree(this.returnToPauseAfterSkillTree));
+    this.addText(cancelX, 465, canEquip ? 'キャンセル' : '閉じる', 16, '#ffffff')
+      .setOrigin(0.5)
+      .setDepth(3003);
   }
 
   private selectSkillTreeSkill(skillId: number): void {
@@ -3087,6 +3221,7 @@ export class GameScene extends Phaser.Scene {
     this.shopButtons = [];
     this.shopCardObjects = [];
     this.hudText = undefined;
+    this.achievementCountText = undefined;
     this.skillButtons = [];
     this.skillButtonIcons = [];
     this.skillCooldownRings = [];
@@ -3129,7 +3264,7 @@ export class GameScene extends Phaser.Scene {
       this.debugPanel.setDepth(2000);
       this.debugText = this.addScreenObject(this.add.text(895, 220, '', {
         fontFamily: 'monospace',
-        fontSize: '14px',
+        fontSize: this.getScaledFontSize(14),
         color: '#d9e2ec',
       }));
       this.debugText.setDepth(2001);
@@ -3151,9 +3286,13 @@ export class GameScene extends Phaser.Scene {
   private addText(x: number, y: number, text: string, fontSize: number, color: string): Phaser.GameObjects.Text {
     return this.addScreenObject(this.add.text(x, y, text, {
       fontFamily: 'sans-serif',
-      fontSize: `${fontSize}px`,
+      fontSize: this.getScaledFontSize(fontSize),
       color,
     }));
+  }
+
+  private getScaledFontSize(fontSize: number): string {
+    return `${fontSize * UI_TEXT_SCALE + 3}px`;
   }
 
   private addScreenObject<T extends Phaser.GameObjects.GameObject>(object: T): T {
