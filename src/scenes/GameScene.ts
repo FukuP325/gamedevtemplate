@@ -442,7 +442,7 @@ export class GameScene extends Phaser.Scene {
     panel.setStrokeStyle(6, 0xf4d35e, 1);
     this.addText(GAME_WIDTH / 2, 145, '金', 76, '#f4d35e').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 235, '敵を倒して、お金を集めよう', 28, '#264653').setOrigin(0.5);
-    this.addText(GAME_WIDTH / 2, 300, '目標：100,000円のクリアチケットを購入する', 22, '#457b9d').setOrigin(0.5);
+    this.addText(GAME_WIDTH / 2, 300, '目標：100,000円で脱出チケットを購入する', 22, '#457b9d').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 360, '敵をクリックして攻撃', 22, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 405, '1〜4：スキル  Esc：ポーズメニュー', 22, '#264653').setOrigin(0.5);
     this.addText(GAME_WIDTH / 2, 450, '敵を倒すとお金を獲得、HPが一部回復', 20, '#457b9d').setOrigin(0.5);
@@ -2139,7 +2139,7 @@ export class GameScene extends Phaser.Scene {
     if (showHpBars) {
       this.progressText = this.addText(36, 225, '', 18, '#ffffff');
       this.progressText.setStroke('#264653', 3);
-      const clearLabel = this.addText(900, 165, 'クリア進行度', 18, '#ffffff');
+      const clearLabel = this.addText(900, 165, '脱出チケット進行度', 18, '#ffffff');
       clearLabel.setStroke('#264653', 3);
       this.clearProgressBar = this.addHpBar(900, 190, 300, 0xf4d35e);
       this.clearProgressBar.setSize(0, 12);
